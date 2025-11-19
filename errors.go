@@ -2,9 +2,9 @@ package vcenter
 
 import "fmt"
 
-// Error types för bättre felhantering
+// Error types for better error handling
 
-// NotFoundError returneras när en resurs inte hittas
+// NotFoundError is returned when a resource is not found
 type NotFoundError struct {
 	ResourceType string
 	Name         string
@@ -14,7 +14,7 @@ func (e *NotFoundError) Error() string {
 	return fmt.Sprintf("%s not found: %s", e.ResourceType, e.Name)
 }
 
-// ValidationError returneras när input-validering misslyckas
+// ValidationError is returned when input validation fails
 type ValidationError struct {
 	Field   string
 	Message string
@@ -24,7 +24,7 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("validation error on field %s: %s", e.Field, e.Message)
 }
 
-// OperationError returneras när en vCenter-operation misslyckas
+// OperationError is returned when a vCenter operation fails
 type OperationError struct {
 	Operation string
 	Err       error
@@ -38,7 +38,7 @@ func (e *OperationError) Unwrap() error {
 	return e.Err
 }
 
-// ConfigurationError returneras när konfiguration är felaktig
+// ConfigurationError is returned when configuration is invalid
 type ConfigurationError struct {
 	Message string
 }
