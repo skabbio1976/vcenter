@@ -1,32 +1,32 @@
-# vcenter - PowerCLI-liknande Go API för VMware vCenter
+# vcenter - PowerCLI-inspired Go API for VMware vCenter
 
-Ett användarvänligt Go-bibliotek för VMware vCenter, inspirerat av PowerCLI. Paketet wrapprar [govmomi](https://github.com/vmware/govmomi) och erbjuder ett enklare och mer intuitivt API för vanliga vCenter-operationer.
+A user-friendly Go library for VMware vCenter, inspired by PowerCLI. This package wraps [govmomi](https://github.com/vmware/govmomi) and provides a simpler, more intuitive API for common vCenter operations.
 
-## Funktioner
+## Features
 
-- **Enkel autentisering**
-  - Username/password med session caching
+- **Easy Authentication**
+  - Username/password with session caching
   - Windows SSPI/Kerberos (single sign-on)
-  - Automatisk session-hantering via [go-vcenter-auth](https://github.com/skabbio1976/go-vcenter-auth)
+  - Automatic session management via [go-vcenter-auth](https://github.com/skabbio1976/go-vcenter-auth)
 
-- **VM-hantering**
-  - Klona VMs från templates
-  - Windows customization med domain join
-  - CPU och minnes-konfiguration
-  - Power-operationer (on/off/restart)
+- **VM Management**
+  - Clone VMs from templates
+  - Windows customization with domain join
+  - CPU and memory configuration
+  - Power operations (on/off/restart)
 
-- **Batch-operationer**
-  - Parallell VM-kloning med goroutines
-  - Bulk power-operationer
+- **Batch Operations**
+  - Parallel VM cloning with goroutines
+  - Bulk power operations
 
-- **Disk-hantering**
-  - Lägg till nya diskar
-  - Utöka befintliga diskar
-  - Ta bort diskar
+- **Disk Management**
+  - Add new disks
+  - Extend existing disks
+  - Remove disks
 
-- **Nätverks-hantering**
-  - Lägg till nätverkskort
-  - Byt nätverk på befintliga kort
+- **Network Management**
+  - Add network adapters
+  - Change network on existing adapters
 
 ## Installation
 
@@ -34,9 +34,9 @@ Ett användarvänligt Go-bibliotek för VMware vCenter, inspirerat av PowerCLI. 
 go get github.com/skabbio1976/vcenter
 ```
 
-## Snabbstart
+## Quick Start
 
-### Anslut med SSPI (Windows)
+### Connect with SSPI (Windows)
 
 ```go
 package main
@@ -51,7 +51,7 @@ import (
 func main() {
     ctx := context.Background()
 
-    // Anslut med Windows integrated auth (SSPI)
+    // Connect with Windows integrated auth (SSPI)
     client, err := vcenter.ConnectWithSSPI(
         ctx,
         "vcenter.example.com",
@@ -63,11 +63,11 @@ func main() {
     }
     defer client.Logout(ctx)
 
-    log.Println("Ansluten till vCenter!")
+    log.Println("Connected to vCenter!")
 }
 ```
 
-### Anslut med username/password
+### Connect with username/password
 
 ```go
 config := vcenter.ConnectConfig{
@@ -85,9 +85,9 @@ if err != nil {
 defer client.Logout(ctx)
 ```
 
-## Exempel
+## Examples
 
-### Klona en VM
+### Clone a VM
 
 ```go
 vm, err := vcenter.CloneVM(
@@ -104,13 +104,13 @@ if err != nil {
     log.Fatal(err)
 }
 
-log.Printf("VM klonades: %s\n", vm.Name())
+log.Printf("VM cloned: %s\n", vm.Name())
 ```
 
-### Klona med Windows customization (domain join)
+### Clone with Windows customization (domain join)
 
 ```go
-// Skapa customization spec för domain join
+// Create customization spec for domain join
 customization := vcenter.NewWindowsCustomization(
     "WebServer01",                    // computer name
     "example.com",                    // domain
@@ -122,7 +122,7 @@ customization := vcenter.NewWindowsCustomization(
     []string{"example.com"},          // DNS suffixes
 )
 
-// Klona VM med customization
+// Clone VM with customization
 vm, err := vcenter.CloneVMWithCustomization(
     ctx,
     client.Client,
@@ -138,13 +138,13 @@ if err != nil {
     log.Fatal(err)
 }
 
-// Vänta på att VMware Tools blir redo
+// Wait for VMware Tools to be ready
 err = vcenter.WaitForTools(ctx, vm)
 if err != nil {
     log.Printf("Warning: VMware Tools timeout: %v\n", err)
 }
 
-// Hämta IP-adress
+// Get IP address
 ip, err := vcenter.WaitForIP(ctx, vm, 10*time.Minute)
 if err != nil {
     log.Printf("Warning: IP timeout: %v\n", err)
@@ -153,7 +153,7 @@ if err != nil {
 }
 ```
 
-### Klona med statisk IP
+### Clone with static IP
 
 ```go
 customization := vcenter.NewWindowsCustomizationStaticIP(
@@ -175,7 +175,7 @@ vm, err := vcenter.CloneVMWithCustomization(ctx, client.Client,
     "datastore1", "Resources", "", customization)
 ```
 
-### Använd ServerRequest för strukturerad konfiguration
+### Use ServerRequest for structured configuration
 
 ```go
 req := vcenter.ServerRequest{
@@ -206,7 +206,7 @@ vm, err := vcenter.CloneFromRequest(
 )
 ```
 
-### Klona flera VMs parallellt
+### Clone multiple VMs in parallel
 
 ```go
 requests := []vcenter.ServerRequest{
@@ -250,51 +250,51 @@ vms, errors := vcenter.CloneMultiple(
     85,
 )
 
-// Kontrollera resultat
+// Check results
 for i, err := range errors {
     if err != nil {
-        log.Printf("Misslyckades att klona %s: %v\n", requests[i].Name, err)
+        log.Printf("Failed to clone %s: %v\n", requests[i].Name, err)
     } else {
-        log.Printf("Lyckades klona %s\n", requests[i].Name)
+        log.Printf("Successfully cloned %s\n", requests[i].Name)
     }
 }
 ```
 
-### Power-operationer
+### Power operations
 
 ```go
-// Hitta en VM
+// Find a VM
 vm, err := vcenter.GetVM(ctx, client.Client, "WebServer01", "Datacenter1")
 if err != nil {
     log.Fatal(err)
 }
 
-// Starta VM
+// Power on VM
 err = vcenter.PowerOnVM(ctx, vm)
 if err != nil {
     log.Fatal(err)
 }
 
-// Stäng av VM
+// Power off VM
 err = vcenter.PowerOffVM(ctx, vm)
 if err != nil {
     log.Fatal(err)
 }
 
-// Starta om VM (graceful med VMware Tools, annars hard reset)
+// Restart VM (graceful with VMware Tools, otherwise hard reset)
 err = vcenter.RestartVM(ctx, vm)
 if err != nil {
     log.Fatal(err)
 }
 ```
 
-### Bulk power-operationer
+### Bulk power operations
 
 ```go
-// Hitta flera VMs
+// Find multiple VMs
 vms := []*object.VirtualMachine{vm1, vm2, vm3}
 
-// Starta alla VMs parallellt
+// Power on all VMs in parallel
 errors := vcenter.BulkPowerOperation(ctx, vms, "on")
 for i, err := range errors {
     if err != nil {
@@ -302,51 +302,51 @@ for i, err := range errors {
     }
 }
 
-// Andra operationer: "off", "restart"
+// Other operations: "off", "restart"
 ```
 
-### Disk-hantering
+### Disk management
 
 ```go
-// Lägg till en 100GB disk
+// Add a 100GB disk
 err = vcenter.AddDisk(ctx, vm, 100, "datastore1")
 if err != nil {
     log.Fatal(err)
 }
 
-// Utöka en disk från 100GB till 200GB
+// Extend a disk from 100GB to 200GB
 err = vcenter.ExtendDisk(ctx, vm, "Hard disk 2", 200)
 if err != nil {
     log.Fatal(err)
 }
 
-// Ta bort en disk (VARNING: Raderar data permanent!)
+// Remove a disk (WARNING: Permanently deletes data!)
 err = vcenter.RemoveDisk(ctx, vm, "Hard disk 3")
 if err != nil {
     log.Fatal(err)
 }
 ```
 
-### Nätverks-hantering
+### Network management
 
 ```go
-// Lägg till ett VMXNET3 nätverkskort
+// Add a VMXNET3 network adapter
 err = vcenter.AddNetworkAdapter(ctx, vm, "Production-VLAN100")
 if err != nil {
     log.Fatal(err)
 }
 
-// Byt nätverk på ett befintligt kort
+// Change network on an existing adapter
 err = vcenter.ChangeNetwork(ctx, vm, "Network adapter 1", "DMZ-VLAN200")
 if err != nil {
     log.Fatal(err)
 }
 ```
 
-### Ändra CPU och minne
+### Change CPU and memory
 
 ```go
-// Sätt 4 CPUs och 8GB RAM
+// Set 4 CPUs and 8GB RAM
 err = vcenter.SetVMResources(ctx, vm, 4, 8192)
 if err != nil {
     log.Fatal(err)
@@ -355,14 +355,14 @@ if err != nil {
 
 ## Error Handling
 
-Paketet använder custom error types för bättre felhantering:
+The package uses custom error types for better error handling:
 
 ```go
 vm, err := vcenter.GetVM(ctx, client.Client, "NonExistent", "DC1")
 if err != nil {
     var notFoundErr *vcenter.NotFoundError
     if errors.As(err, &notFoundErr) {
-        log.Printf("Resursen hittades inte: %s\n", notFoundErr)
+        log.Printf("Resource not found: %s\n", notFoundErr)
     }
 }
 
@@ -371,7 +371,7 @@ err = req.Validate()
 if err != nil {
     var validationErr *vcenter.ValidationError
     if errors.As(err, &validationErr) {
-        log.Printf("Valideringsfel på fält %s: %s\n",
+        log.Printf("Validation error on field %s: %s\n",
             validationErr.Field, validationErr.Message)
     }
 }
@@ -379,7 +379,7 @@ if err != nil {
 
 ## Windows Timezone IDs
 
-Vanliga timezone IDs för Windows customization:
+Common timezone IDs for Windows customization:
 
 - `4` - Eastern Standard Time (EST)
 - `15` - U.S. Eastern Standard Time
@@ -390,18 +390,18 @@ Vanliga timezone IDs för Windows customization:
 - `110` - Alaska Standard Time
 - `220` - UTC
 
-Fullständig lista: https://docs.microsoft.com/en-us/previous-versions/windows/embedded/ms912391(v=winembedded.11)
+Full list: https://docs.microsoft.com/en-us/previous-versions/windows/embedded/ms912391(v=winembedded.11)
 
-## Licens
+## License
 
-MIT License - Se LICENSE filen för detaljer.
+MIT License - See LICENSE file for details.
 
-## Bidra
+## Contributing
 
-Pull requests är välkomna! För större ändringar, öppna först ett issue för att diskutera vad du vill ändra.
+Pull requests are welcome! For major changes, please open an issue first to discuss what you would like to change.
 
 ## Credits
 
-- Baserat på [govmomi](https://github.com/vmware/govmomi)
-- Använder [go-vcenter-auth](https://github.com/skabbio1976/go-vcenter-auth) för autentisering
-- Inspirerat av VMware PowerCLI
+- Built on [govmomi](https://github.com/vmware/govmomi)
+- Uses [go-vcenter-auth](https://github.com/skabbio1976/go-vcenter-auth) for authentication
+- Inspired by VMware PowerCLI
