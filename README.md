@@ -14,6 +14,7 @@ A user-friendly Go library for VMware vCenter, inspired by PowerCLI. This packag
   - Windows customization with domain join
   - CPU and memory configuration
   - Power operations (on/off/restart)
+  - Support for datastore clusters (Storage DRS)
 
 - **Batch Operations**
   - Parallel VM cloning with goroutines
@@ -352,6 +353,51 @@ if err != nil {
     log.Fatal(err)
 }
 ```
+
+### Using Datastore Clusters (Storage DRS)
+
+All clone functions support both regular datastores and datastore clusters. When you specify
+a datastore cluster, the package automatically uses Storage DRS to select the best datastore
+based on space and I/O load.
+
+```go
+// Clone to a datastore cluster instead of a specific datastore
+vm, err := vcenter.CloneVM(
+    ctx,
+    client.Client,
+    "Windows-2022-Template",
+    "WebServer01",
+    "Datacenter1",
+    "Production-DatastoreCluster",  // Datastore cluster name
+    "Resources",
+    "WebServers",
+)
+
+// Also works with CloneFromRequest and CloneMultiple
+req := vcenter.ServerRequest{
+    Name:     "AppServer01",
+    Template: "Windows-2022-Template",
+    // ... other settings
+}
+
+vm, err = vcenter.CloneFromRequest(
+    ctx,
+    client.Client,
+    req,
+    "Datacenter1",
+    "Production-DatastoreCluster",  // Datastore cluster automatically detected
+    "Resources",
+    "AppServers",
+    "administrator@example.com",
+    "domainPassword",
+    "localAdminPassword",
+    85,
+)
+```
+
+**Note:** The package automatically detects whether the specified name is a datastore cluster
+or a regular datastore. If it's a datastore cluster, Storage DRS will select the optimal
+datastore based on vCenter's recommendation engine.
 
 ## Error Handling
 

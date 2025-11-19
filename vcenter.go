@@ -12,6 +12,121 @@ import (
 	"github.com/vmware/govmomi/vim25/types"
 )
 
+// resolveDatastoreOrCluster attempts to find either a datastore cluster or a regular datastore.
+// It first tries to find a datastore cluster (StoragePod), and if that fails, tries to find
+// a regular datastore. This allows the clone functions to accept either type.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - finder: The Finder instance (must have datacenter set)
+//   - name: The name of the datastore or datastore cluster
+//
+// Returns:
+//   - isCluster: true if the name refers to a datastore cluster, false if regular datastore
+//   - datastoreRef: Reference to the datastore (nil if cluster)
+//   - clusterRef: Reference to the datastore cluster/StoragePod (nil if regular datastore)
+//   - error: Any error that occurred during lookup
+func resolveDatastoreOrCluster(
+	ctx context.Context,
+	finder *find.Finder,
+	name string,
+) (isCluster bool, datastoreRef *types.ManagedObjectReference, clusterRef *types.ManagedObjectReference, err error) {
+	// Try to find as datastore cluster first
+	storagePod, err := finder.DatastoreCluster(ctx, name)
+	if err == nil {
+		// Found a datastore cluster
+		ref := storagePod.Reference()
+		return true, nil, &ref, nil
+	}
+
+	// Not a cluster, try as regular datastore
+	ds, err := finder.Datastore(ctx, name)
+	if err != nil {
+		return false, nil, nil, fmt.Errorf("neither datastore cluster nor datastore found with name '%s': %w", name, err)
+	}
+
+	ref := ds.Reference()
+	return false, &ref, nil, nil
+}
+
+// getStoragePlacementResult uses Storage DRS to get a recommended datastore from a cluster.
+// This function is called when cloning to a datastore cluster to let vSphere choose the
+// best datastore based on space and I/O load.
+func getStoragePlacementResult(
+	ctx context.Context,
+	client *govmomi.Client,
+	template *object.VirtualMachine,
+	vmFolder *object.Folder,
+	vmName string,
+	pool *object.ResourcePool,
+	storagePod types.ManagedObjectReference,
+	powerOn bool,
+	customization *types.CustomizationSpec,
+) (*types.ManagedObjectReference, error) {
+	// Get storage resource manager
+	storageRM := object.NewStorageResourceManager(client.Client)
+
+	// Create clone spec with customization if provided
+	relocateSpec := types.VirtualMachineRelocateSpec{
+		Pool:         types.NewReference(pool.Reference()),
+		DiskMoveType: string(types.VirtualMachineRelocateDiskMoveOptionsMoveAllDiskBackingsAndAllowSharing),
+	}
+
+	cloneSpec := types.VirtualMachineCloneSpec{
+		Location:      relocateSpec,
+		PowerOn:       powerOn,
+		Template:      false,
+		Customization: customization,
+	}
+
+	podSelectionSpec := types.StorageDrsPodSelectionSpec{
+		StoragePod: &storagePod,
+	}
+
+	placementSpec := types.StoragePlacementSpec{
+		Type:             string(types.StoragePlacementSpecPlacementTypeClone),
+		Vm:               types.NewReference(template.Reference()),
+		PodSelectionSpec: podSelectionSpec,
+		CloneSpec:        &cloneSpec,
+		CloneName:        vmName,
+		Folder:           types.NewReference(vmFolder.Reference()),
+		ResourcePool:     types.NewReference(pool.Reference()),
+	}
+
+	// Get recommendation
+	result, err := storageRM.RecommendDatastores(ctx, placementSpec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get storage placement recommendation: %w", err)
+	}
+
+	if len(result.Recommendations) == 0 {
+		return nil, fmt.Errorf("no storage placement recommendations available")
+	}
+
+	// Use the first (best) recommendation
+	recommendation := result.Recommendations[0]
+
+	// Apply the recommendation
+	task, err := storageRM.ApplyStorageDrsRecommendation(ctx, []string{recommendation.Key})
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply storage placement recommendation: %w", err)
+	}
+
+	// Wait for the task to complete
+	info, err := task.WaitForResult(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("storage placement task failed: %w", err)
+	}
+
+	// The result should be the cloned VM
+	vmRef, ok := info.Result.(types.ManagedObjectReference)
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type from storage placement")
+	}
+
+	return &vmRef, nil
+}
+
 // CloneVM clones a virtual machine from a template.
 //
 // The function creates a new VM based on the specified template and places it
@@ -23,7 +138,7 @@ import (
 //   - templateName: The name of the template to clone from
 //   - vmName: The name of the new VM
 //   - datacenter: The name of the datacenter
-//   - datastore: The name of the datastore where the VM should be created
+//   - datastore: The name of the datastore or datastore cluster where the VM should be created
 //   - resourcePool: The name of the resource pool (e.g. "Resources")
 //   - folder: The name of the VM folder (empty string for default VM folder)
 //
@@ -57,11 +172,6 @@ func CloneVM(
 		return nil, fmt.Errorf("template not found: %w", err)
 	}
 
-	ds, err := finder.Datastore(ctx, datastore)
-	if err != nil {
-		return nil, fmt.Errorf("datastore not found: %w", err)
-	}
-
 	pool, err := finder.ResourcePool(ctx, resourcePool)
 	if err != nil {
 		return nil, fmt.Errorf("resource pool not found: %w", err)
@@ -81,8 +191,25 @@ func CloneVM(
 		vmFolder = folders.VmFolder
 	}
 
+	// Resolve datastore or datastore cluster
+	isCluster, datastoreRef, clusterRef, err := resolveDatastoreOrCluster(ctx, finder, datastore)
+	if err != nil {
+		return nil, err
+	}
+
+	// If it's a datastore cluster, use Storage DRS placement
+	if isCluster {
+		vmRef, err := getStoragePlacementResult(ctx, client, template, vmFolder, vmName, pool, *clusterRef, false, nil)
+		if err != nil {
+			return nil, err
+		}
+		vm := object.NewVirtualMachine(client.Client, *vmRef)
+		return vm, nil
+	}
+
+	// Regular datastore - use normal clone
 	relocateSpec := types.VirtualMachineRelocateSpec{
-		Datastore:    types.NewReference(ds.Reference()),
+		Datastore:    datastoreRef,
 		Pool:         types.NewReference(pool.Reference()),
 		DiskMoveType: string(types.VirtualMachineRelocateDiskMoveOptionsMoveAllDiskBackingsAndAllowSharing),
 	}
@@ -119,7 +246,7 @@ func CloneVM(
 //   - templateName: The name of the template to clone from
 //   - vmName: The name of the new VM
 //   - datacenter: The name of the datacenter
-//   - datastore: The name of the datastore where the VM should be created
+//   - datastore: The name of the datastore or datastore cluster where the VM should be created
 //   - resourcePool: The name of the resource pool
 //   - folder: The name of the VM folder (empty string for default)
 //   - customization: CustomizationSpec with all Windows settings
@@ -157,11 +284,6 @@ func CloneVMWithCustomization(
 		return nil, fmt.Errorf("template not found: %w", err)
 	}
 
-	ds, err := finder.Datastore(ctx, datastore)
-	if err != nil {
-		return nil, fmt.Errorf("datastore not found: %w", err)
-	}
-
 	pool, err := finder.ResourcePool(ctx, resourcePool)
 	if err != nil {
 		return nil, fmt.Errorf("resource pool not found: %w", err)
@@ -181,8 +303,25 @@ func CloneVMWithCustomization(
 		vmFolder = folders.VmFolder
 	}
 
+	// Resolve datastore or datastore cluster
+	isCluster, datastoreRef, clusterRef, err := resolveDatastoreOrCluster(ctx, finder, datastore)
+	if err != nil {
+		return nil, err
+	}
+
+	// If it's a datastore cluster, use Storage DRS placement
+	if isCluster {
+		vmRef, err := getStoragePlacementResult(ctx, client, template, vmFolder, vmName, pool, *clusterRef, true, customization)
+		if err != nil {
+			return nil, err
+		}
+		vm := object.NewVirtualMachine(client.Client, *vmRef)
+		return vm, nil
+	}
+
+	// Regular datastore - use normal clone
 	relocateSpec := types.VirtualMachineRelocateSpec{
-		Datastore:    types.NewReference(ds.Reference()),
+		Datastore:    datastoreRef,
 		Pool:         types.NewReference(pool.Reference()),
 		DiskMoveType: string(types.VirtualMachineRelocateDiskMoveOptionsMoveAllDiskBackingsAndAllowSharing),
 	}
@@ -632,7 +771,7 @@ func (r *ServerRequest) Validate() error {
 //   - client: govmomi.Client for vCenter connection
 //   - req: ServerRequest with all VM configuration
 //   - datacenter: The name of the datacenter
-//   - datastore: The name of the datastore
+//   - datastore: The name of the datastore or datastore cluster
 //   - resourcePool: The name of the resource pool
 //   - folder: The name of the VM folder (empty for default)
 //   - domainUser: Domain admin for domain join
@@ -760,6 +899,7 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 //	vms, errors := vcenter.CloneMultiple(ctx, client, requests,
 //	    "DC1", "datastore1", "Resources", "", "admin@example.com",
 //	    "domainpass", "adminpass", 85)
+//	// Note: datastore parameter can be either a datastore name or a datastore cluster name
 //	for i, err := range errors {
 //	    if err != nil {
 //	        log.Printf("Failed to clone %s: %v", requests[i].Name, err)
