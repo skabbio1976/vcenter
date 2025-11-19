@@ -8,11 +8,11 @@ import (
 	"github.com/skabbio1976/vcenter"
 )
 
-// Detta exempel visar hur man klonar en Windows VM med statisk IP-adress.
+// This example demonstrates how to clone a Windows VM with a static IP address.
 func main() {
 	ctx := context.Background()
 
-	// Anslut till vCenter
+	// Connect to vCenter
 	config := vcenter.ConnectConfig{
 		Host:       "vcenter.example.com",
 		Username:   "administrator@vsphere.local",
@@ -27,7 +27,7 @@ func main() {
 	}
 	defer client.Logout(ctx)
 
-	// Skapa Windows customization spec med statisk IP
+	// Create Windows customization spec with static IP
 	customization := vcenter.NewWindowsCustomizationStaticIP(
 		"DBServer01",                     // Computer name
 		"example.com",                    // AD Domain
@@ -42,9 +42,9 @@ func main() {
 		[]string{"example.com"},          // DNS suffixes
 	)
 
-	log.Println("Klonar Windows VM med statisk IP...")
+	log.Println("Cloning Windows VM with static IP...")
 
-	// Klona VM
+	// Clone VM
 	vm, err := vcenter.CloneVMWithCustomization(
 		ctx,
 		client.Client,
@@ -57,13 +57,13 @@ func main() {
 		customization,
 	)
 	if err != nil {
-		log.Fatalf("Misslyckades att klona VM: %v", err)
+		log.Fatalf("Failed to clone VM: %v", err)
 	}
 
-	log.Printf("✓ VM klonad: %s", vm.Name())
+	log.Printf("✓ VM cloned: %s", vm.Name())
 
-	// Vänta på VMware Tools och IP
-	log.Println("Väntar på VMware Tools och IP-konfiguration...")
+	// Wait for VMware Tools and IP
+	log.Println("Waiting for VMware Tools and IP configuration...")
 	err = vcenter.WaitForTools(ctx, vm)
 	if err != nil {
 		log.Printf("Warning: %v", err)
@@ -73,8 +73,8 @@ func main() {
 	if err != nil {
 		log.Printf("Warning: %v", err)
 	} else {
-		log.Printf("✓ VM IP: %s (ska vara 192.168.1.100)", ip)
+		log.Printf("✓ VM IP: %s (should be 192.168.1.100)", ip)
 	}
 
-	log.Println("✓ Klart!")
+	log.Println("✓ Done!")
 }

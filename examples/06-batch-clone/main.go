@@ -7,11 +7,11 @@ import (
 	"github.com/skabbio1976/vcenter"
 )
 
-// Detta exempel visar hur man klonar flera VMs parallellt med ServerRequest.
+// This example demonstrates how to clone multiple VMs in parallel with ServerRequest.
 func main() {
 	ctx := context.Background()
 
-	// Anslut till vCenter
+	// Connect to vCenter
 	config := vcenter.ConnectConfig{
 		Host:       "vcenter.example.com",
 		Username:   "administrator@vsphere.local",
@@ -26,7 +26,7 @@ func main() {
 	}
 	defer client.Logout(ctx)
 
-	// Definiera flera servrar att klona
+	// Define multiple servers to clone
 	requests := []vcenter.ServerRequest{
 		{
 			Name:       "WebServer01",
@@ -62,9 +62,9 @@ func main() {
 		},
 	}
 
-	log.Printf("Klonar %d VMs parallellt...\n", len(requests))
+	log.Printf("Cloning %d VMs in parallel...\n", len(requests))
 
-	// Klona alla VMs parallellt
+	// Clone all VMs in parallel
 	vms, errors := vcenter.CloneMultiple(
 		ctx,
 		client.Client,
@@ -79,7 +79,7 @@ func main() {
 		85, // Timezone
 	)
 
-	// Visa resultat
+	// Show results
 	successCount := 0
 	failCount := 0
 
@@ -88,14 +88,14 @@ func main() {
 			log.Printf("✗ %s: %v", requests[i].Name, err)
 			failCount++
 		} else {
-			log.Printf("✓ %s: Lyckades", requests[i].Name)
+			log.Printf("✓ %s: Succeeded", requests[i].Name)
 			successCount++
 		}
 	}
 
-	log.Printf("\n=== Sammanfattning ===")
-	log.Printf("Totalt: %d", len(requests))
-	log.Printf("Lyckades: %d", successCount)
-	log.Printf("Misslyckades: %d", failCount)
-	log.Printf("Skapade VMs: %d", len(vms))
+	log.Printf("\n=== Summary ===")
+	log.Printf("Total: %d", len(requests))
+	log.Printf("Succeeded: %d", successCount)
+	log.Printf("Failed: %d", failCount)
+	log.Printf("Created VMs: %d", len(vms))
 }

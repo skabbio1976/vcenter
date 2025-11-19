@@ -7,11 +7,11 @@ import (
 	"github.com/skabbio1976/vcenter"
 )
 
-// Detta exempel visar hur man klonar en enkel VM utan customization.
+// This example demonstrates how to clone a simple VM without customization.
 func main() {
 	ctx := context.Background()
 
-	// Anslut till vCenter
+	// Connect to vCenter
 	config := vcenter.ConnectConfig{
 		Host:       "vcenter.example.com",
 		Username:   "administrator@vsphere.local",
@@ -26,9 +26,9 @@ func main() {
 	}
 	defer client.Logout(ctx)
 
-	log.Println("Startar kloning av VM...")
+	log.Println("Starting VM clone...")
 
-	// Klona VM
+	// Clone VM
 	vm, err := vcenter.CloneVM(
 		ctx,
 		client.Client,
@@ -37,29 +37,29 @@ func main() {
 		"Datacenter1",           // datacenter
 		"datastore1",            // datastore
 		"Resources",             // resource pool
-		"",                      // folder (tom = default VM folder)
+		"",                      // folder (empty = default VM folder)
 	)
 	if err != nil {
-		log.Fatalf("Misslyckades att klona VM: %v", err)
+		log.Fatalf("Failed to clone VM: %v", err)
 	}
 
-	log.Printf("✓ VM klonad: %s", vm.Name())
+	log.Printf("✓ VM cloned: %s", vm.Name())
 
-	// Ändra resurser (4 CPU, 8GB RAM)
-	log.Println("Sätter CPU och minne...")
+	// Set resources (4 CPU, 8GB RAM)
+	log.Println("Setting CPU and memory...")
 	err = vcenter.SetVMResources(ctx, vm, 4, 8192)
 	if err != nil {
-		log.Printf("Warning: Misslyckades att sätta resurser: %v", err)
+		log.Printf("Warning: Failed to set resources: %v", err)
 	} else {
-		log.Println("✓ Resurser uppdaterade: 4 CPU, 8GB RAM")
+		log.Println("✓ Resources updated: 4 CPU, 8GB RAM")
 	}
 
-	// Starta VM
-	log.Println("Startar VM...")
+	// Power on VM
+	log.Println("Starting VM...")
 	err = vcenter.PowerOnVM(ctx, vm)
 	if err != nil {
-		log.Printf("Warning: Misslyckades att starta VM: %v", err)
+		log.Printf("Warning: Failed to start VM: %v", err)
 	} else {
-		log.Println("✓ VM startad")
+		log.Println("✓ VM started")
 	}
 }

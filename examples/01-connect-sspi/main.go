@@ -7,12 +7,12 @@ import (
 	"github.com/skabbio1976/vcenter"
 )
 
-// Detta exempel visar hur man ansluter till vCenter med Windows SSPI/Kerberos.
-// Fungerar endast på Windows och använder den inloggade användarens credentials.
+// This example demonstrates how to connect to vCenter with Windows SSPI/Kerberos.
+// Only works on Windows and uses the logged-in user's credentials.
 func main() {
 	ctx := context.Background()
 
-	// Anslut med SSPI (Windows integrated authentication)
+	// Connect with SSPI (Windows integrated authentication)
 	client, err := vcenter.ConnectWithSSPI(
 		ctx,
 		"vcenter.example.com", // vCenter hostname
@@ -20,17 +20,17 @@ func main() {
 		"Datacenter1",         // datacenter name
 	)
 	if err != nil {
-		log.Fatalf("Misslyckades att ansluta: %v", err)
+		log.Fatalf("Failed to connect: %v", err)
 	}
 	defer client.Logout(ctx)
 
-	log.Println("✓ Ansluten till vCenter med SSPI")
+	log.Println("✓ Connected to vCenter with SSPI")
 
-	// Visa datacenter-information
+	// Display datacenter information
 	dc := client.GetDatacenter()
 	if dc != nil {
 		log.Printf("✓ Datacenter: %s", client.GetDatacenterName())
 	}
 
-	log.Println("✓ Session aktiv")
+	log.Println("✓ Session active")
 }

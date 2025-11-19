@@ -1,73 +1,73 @@
-# vcenter - Kodexempel
+# vcenter - Code Examples
 
-Den här katalogen innehåller praktiska exempel som visar hur man använder vcenter-paketet för olika vCenter-operationer.
+This directory contains practical examples demonstrating how to use the vcenter package for various vCenter operations.
 
-## Översikt
+## Overview
 
-Exemplen är organiserade i numerisk ordning från enkel till avancerad användning:
+The examples are organized in numerical order from simple to advanced usage:
 
-### Anslutning
+### Connection
 
-- **01-connect-sspi** - Anslut med Windows SSPI/Kerberos (single sign-on)
-- **02-connect-password** - Anslut med username och password
+- **01-connect-sspi** - Connect with Windows SSPI/Kerberos (single sign-on)
+- **02-connect-password** - Connect with username and password
 
-### VM-kloning
+### VM Cloning
 
-- **03-simple-clone** - Enkel VM-kloning utan customization
-- **04-clone-with-customization** - Klona Windows VM med domain join (DHCP)
-- **05-clone-static-ip** - Klona Windows VM med statisk IP-adress
-- **10-server-request** - Använd ServerRequest för strukturerad konfiguration
+- **03-simple-clone** - Simple VM cloning without customization
+- **04-clone-with-customization** - Clone Windows VM with domain join (DHCP)
+- **05-clone-static-ip** - Clone Windows VM with static IP address
+- **10-server-request** - Use ServerRequest for structured configuration
 
-### Batch-operationer
+### Batch Operations
 
-- **06-batch-clone** - Klona flera VMs parallellt
-- **07-bulk-power** - Power-operationer på flera VMs samtidigt
+- **06-batch-clone** - Clone multiple VMs in parallel
+- **07-bulk-power** - Power operations on multiple VMs simultaneously
 
-### VM-hantering
+### VM Management
 
-- **08-disk-operations** - Lägg till, utöka och ta bort diskar
-- **09-network-operations** - Lägg till och ändra nätverkskort
+- **08-disk-operations** - Add, extend, and remove disks
+- **09-network-operations** - Add and modify network adapters
 
-## Hur man kör exemplen
+## How to Run the Examples
 
-### Förutsättningar
+### Prerequisites
 
-1. Go 1.21 eller senare installerat
-2. Tillgång till en vCenter Server
-3. En template att klona från
+1. Go 1.21 or later installed
+2. Access to a vCenter Server
+3. A template to clone from
 
-### Konfigurera exempel
+### Configure Examples
 
-Varje exempel innehåller platshållare som behöver uppdateras:
+Each example contains placeholders that need to be updated:
 
 ```go
-// Uppdatera dessa värden
-Host:       "vcenter.example.com",      // Din vCenter hostname
+// Update these values
+Host:       "vcenter.example.com",      // Your vCenter hostname
 Username:   "administrator@vsphere.local",
 Password:   "YourPassword",
-Datacenter: "Datacenter1",              // Ditt datacenter
+Datacenter: "Datacenter1",              // Your datacenter
 ```
 
-### Kör ett exempel
+### Run an Example
 
 ```bash
-# Navigera till exempel-katalogen
+# Navigate to the examples directory
 cd examples/03-simple-clone
 
-# Redigera main.go och uppdatera konfigurationen
+# Edit main.go and update the configuration
 vim main.go
 
-# Kör exemplet
+# Run the example
 go run main.go
 ```
 
-## Exempel-beskrivningar
+## Example Descriptions
 
 ### 01-connect-sspi
 
-Visar hur man ansluter med Windows integrated authentication. Perfekt för Windows-miljöer där användare redan är autentiserade mot Active Directory.
+Demonstrates how to connect using Windows integrated authentication. Perfect for Windows environments where users are already authenticated against Active Directory.
 
-**Kräver:** Windows-operativsystem
+**Requires:** Windows operating system
 
 ```bash
 cd examples/01-connect-sspi
@@ -76,7 +76,7 @@ go run main.go
 
 ### 02-connect-password
 
-Visar standardanslutning med username och password. Fungerar på alla plattformar och använder session caching för bättre prestanda.
+Shows standard connection with username and password. Works on all platforms and uses session caching for better performance.
 
 ```bash
 cd examples/02-connect-password
@@ -85,10 +85,10 @@ go run main.go
 
 ### 03-simple-clone
 
-Grundläggande VM-kloning utan Windows customization. Bra för:
+Basic VM cloning without Windows customization. Good for:
 - Linux VMs
-- Templates utan sysprep
-- Snabb kloning för test
+- Templates without sysprep
+- Quick cloning for testing
 
 ```bash
 cd examples/03-simple-clone
@@ -97,12 +97,12 @@ go run main.go
 
 ### 04-clone-with-customization
 
-Klona Windows VM med:
+Clone Windows VM with:
 - Domain join
-- DHCP IP-konfiguration
-- DNS-inställningar
+- DHCP IP configuration
+- DNS settings
 - Timezone
-- Automatisk väntan på VMware Tools och IP
+- Automatic waiting for VMware Tools and IP
 
 ```bash
 cd examples/04-clone-with-customization
@@ -111,7 +111,7 @@ go run main.go
 
 ### 05-clone-static-ip
 
-Samma som exemplet ovan men med statisk IP-adress istället för DHCP. Perfekt för servrar som behöver fasta IP-adresser.
+Same as the example above but with static IP address instead of DHCP. Perfect for servers that need fixed IP addresses.
 
 ```bash
 cd examples/05-clone-static-ip
@@ -120,27 +120,27 @@ go run main.go
 
 ### 06-batch-clone
 
-Visar hur man klonar flera VMs parallellt med goroutines. Dramatiskt snabbare än sekventiell kloning:
+Demonstrates how to clone multiple VMs in parallel with goroutines. Dramatically faster than sequential cloning:
 
-- 4 VMs klonas samtidigt
-- Visar framgång/misslyckande för varje VM
-- Använder ServerRequest för konfiguration
+- 4 VMs cloned simultaneously
+- Shows success/failure for each VM
+- Uses ServerRequest for configuration
 
 ```bash
 cd examples/06-batch-clone
 go run main.go
 ```
 
-**Prestanda:** Klonar 4 VMs på samma tid som det tar att klona 1 VM sekventiellt.
+**Performance:** Clones 4 VMs in the same time it takes to clone 1 VM sequentially.
 
 ### 07-bulk-power
 
-Parallella power-operationer på flera VMs:
+Parallel power operations on multiple VMs:
 - Power on
 - Power off
 - Restart
 
-Perfekt för att starta/stänga hela miljöer samtidigt.
+Perfect for starting/stopping entire environments simultaneously.
 
 ```bash
 cd examples/07-bulk-power
@@ -149,12 +149,12 @@ go run main.go
 
 ### 08-disk-operations
 
-Komplett exempel på disk-hantering:
-- Lägg till nya diskar (thin provisioned)
-- Utöka befintliga diskar
-- Ta bort diskar
+Complete example of disk management:
+- Add new disks (thin provisioned)
+- Extend existing disks
+- Remove disks
 
-**OBS:** Kommer ihåg att utöka partitioner i gästsystemet efter disk-utökning.
+**NOTE:** Remember to extend partitions in the guest system after disk extension.
 
 ```bash
 cd examples/08-disk-operations
@@ -163,10 +163,10 @@ go run main.go
 
 ### 09-network-operations
 
-Nätverkskort-hantering:
-- Lägg till VMXNET3-adapters
-- Byt nätverk/portgrupp
-- Multi-NIC konfiguration
+Network adapter management:
+- Add VMXNET3 adapters
+- Change network/port group
+- Multi-NIC configuration
 
 ```bash
 cd examples/09-network-operations
@@ -175,11 +175,11 @@ go run main.go
 
 ### 10-server-request
 
-Avancerat exempel som visar ServerRequest struct för:
-- Strukturerad server-konfiguration
-- Input-validering
-- Komplett server-provisionering med en funktion
-- Automatisk verifiering av IP-konfiguration
+Advanced example showing ServerRequest struct for:
+- Structured server configuration
+- Input validation
+- Complete server provisioning with one function
+- Automatic verification of IP configuration
 
 ```bash
 cd examples/10-server-request
@@ -190,21 +190,21 @@ go run main.go
 
 ### 1. Error Handling
 
-Hantera alltid errors och använd type assertions för specifika error-typer:
+Always handle errors and use type assertions for specific error types:
 
 ```go
 vm, err := vcenter.GetVM(ctx, client.Client, "NonExistent", "DC1")
 if err != nil {
     var notFoundErr *vcenter.NotFoundError
     if errors.As(err, &notFoundErr) {
-        log.Printf("VM hittades inte: %s", notFoundErr)
+        log.Printf("VM not found: %s", notFoundErr)
     }
 }
 ```
 
-### 2. Context och Timeout
+### 2. Context and Timeout
 
-Använd alltid context med timeout för långvariga operationer:
+Always use context with timeout for long-running operations:
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -215,25 +215,25 @@ vm, err := vcenter.CloneVM(ctx, ...)
 
 ### 3. Resource Cleanup
 
-Glöm inte att logga ut från vCenter:
+Don't forget to logout from vCenter:
 
 ```go
 client, err := vcenter.ConnectWithPassword(ctx, config)
 if err != nil {
     log.Fatal(err)
 }
-defer client.Logout(ctx)  // VIKTIGT!
+defer client.Logout(ctx)  // IMPORTANT!
 ```
 
-### 4. Parallella Operationer
+### 4. Parallel Operations
 
-För batch-operationer, använd de inbyggda parallella funktionerna:
+For batch operations, use the built-in parallel functions:
 
 ```go
-// GOOD - Parallell kloning
+// GOOD - Parallel cloning
 vms, errors := vcenter.CloneMultiple(ctx, client, requests, ...)
 
-// AVOID - Sekventiell kloning
+// AVOID - Sequential cloning
 for _, req := range requests {
     vm, err := vcenter.CloneFromRequest(ctx, client, req, ...)
 }
@@ -241,7 +241,7 @@ for _, req := range requests {
 
 ### 5. VMware Tools
 
-Vänta alltid på VMware Tools innan IP-operationer:
+Always wait for VMware Tools before IP operations:
 
 ```go
 err = vcenter.WaitForTools(ctx, vm)
@@ -250,67 +250,67 @@ if err == nil {
 }
 ```
 
-## Vanliga Problem
+## Common Problems
 
 ### Problem: "VM not found"
 
-**Lösning:** Kontrollera att VM-namnet och datacenter är korrekt:
+**Solution:** Check that the VM name and datacenter are correct:
 
 ```go
-// Sök i alla datacenter
+// Search in all datacenters
 vm, err := vcenter.GetVM(ctx, client.Client, "VMName", "")
 
-// Sök i specifikt datacenter
+// Search in specific datacenter
 vm, err := vcenter.GetVM(ctx, client.Client, "VMName", "DC1")
 ```
 
-### Problem: Timeout vid WaitForIP
+### Problem: Timeout at WaitForIP
 
-**Lösning:**
-1. Kontrollera att VMware Tools är installerat
-2. Öka timeout-värdet
-3. Kontrollera nätverkskonfiguration
+**Solution:**
+1. Check that VMware Tools is installed
+2. Increase the timeout value
+3. Check network configuration
 
 ```go
-// Öka timeout till 15 minuter
+// Increase timeout to 15 minutes
 ip, err := vcenter.WaitForIP(ctx, vm, 15*time.Minute)
 ```
 
 ### Problem: "disk with label X not found"
 
-**Lösning:** Kontrollera exakt label på disken i vCenter:
+**Solution:** Check the exact label of the disk in vCenter:
 
 ```go
-// Använd exakt label från vCenter
+// Use exact label from vCenter
 err := vcenter.ExtendDisk(ctx, vm, "Hard disk 2", 200)
 ```
 
-### Problem: Customization fungerar inte
+### Problem: Customization doesn't work
 
-**Lösning:**
-1. Kontrollera att templaten har sysprep förberett
-2. Verifiera domain credentials
-3. Kontrollera DNS-konfiguration
-4. Se till att PowerOn är true i CloneSpec
+**Solution:**
+1. Check that the template has sysprep prepared
+2. Verify domain credentials
+3. Check DNS configuration
+4. Make sure PowerOn is true in CloneSpec
 
-## Ytterligare Resurser
+## Additional Resources
 
-- [Huvuddokumentation](../README.md)
+- [Main documentation](../README.md)
 - [godoc](https://pkg.go.dev/github.com/skabbio1976/vcenter)
-- [govmomi dokumentation](https://github.com/vmware/govmomi)
+- [govmomi documentation](https://github.com/vmware/govmomi)
 - [VMware vSphere API](https://developer.vmware.com/apis/968/vsphere)
 
-## Bidra med Exempel
+## Contributing Examples
 
-Har du ett användbart exempel? Skicka en pull request med:
+Have a useful example? Send a pull request with:
 
-1. Välorganiserad kod med kommentarer
-2. Uppdatering av denna README
-3. Testning mot en faktisk vCenter
+1. Well-organized code with comments
+2. Update to this README
+3. Testing against an actual vCenter
 
 ## Support
 
-Om du hittar buggar eller har frågor:
-- Öppna ett issue på GitHub
-- Kontrollera befintliga exempel först
-- Inkludera felmeddelanden och Go-version
+If you find bugs or have questions:
+- Open an issue on GitHub
+- Check existing examples first
+- Include error messages and Go version

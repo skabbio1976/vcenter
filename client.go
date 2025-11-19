@@ -13,7 +13,7 @@ import (
 	"github.com/vmware/govmomi/session"
 )
 
-// Client är en wrapper runt govmomi.Client med cached datacenter och helper-funktioner
+// Client is a wrapper around govmomi.Client with cached datacenter and helper functions
 type Client struct {
 	*govmomi.Client
 	datacenter     *object.Datacenter
@@ -22,7 +22,7 @@ type Client struct {
 	mu             sync.RWMutex
 }
 
-// ConnectConfig innehåller konfiguration för att ansluta till vCenter
+// ConnectConfig contains configuration for connecting to vCenter
 type ConnectConfig struct {
 	Host       string
 	Username   string
@@ -31,8 +31,8 @@ type ConnectConfig struct {
 	Datacenter string
 }
 
-// ConnectWithPassword ansluter till vCenter med username/password
-// Använder go-vcenter-auth för session caching och automatisk återanslutning
+// ConnectWithPassword connects to vCenter with username/password
+// Uses go-vcenter-auth for session caching and automatic reconnection
 func ConnectWithPassword(ctx context.Context, config ConnectConfig) (*Client, error) {
 	if config.Host == "" {
 		return nil, &ValidationError{Field: "Host", Message: "host is required"}
@@ -44,28 +44,28 @@ func ConnectWithPassword(ctx context.Context, config ConnectConfig) (*Client, er
 		return nil, &ValidationError{Field: "Password", Message: "password is required"}
 	}
 
-	// Använd go-vcenter-auth för att logga in med session caching
+	// Use go-vcenter-auth to log in with session caching
 	authClient, err := vcauth.Login(ctx, config.Host, config.Username, config.Password, config.Insecure)
 	if err != nil {
 		return nil, &OperationError{Operation: "login", Err: err}
 	}
 
-	// Hämta vim25.Client från go-vcenter-auth
+	// Retrieve vim25.Client from go-vcenter-auth
 	vim25Client := authClient.GetVim()
 
-	// Skapa govmomi.Client från vim25.Client
+	// Create govmomi.Client from vim25.Client
 	govmomiClient := &govmomi.Client{
 		Client:         vim25Client,
 		SessionManager: session.NewManager(vim25Client),
 	}
 
-	// Skapa vår Client wrapper
+	// Create our Client wrapper
 	client := &Client{
 		Client:         govmomiClient,
 		datacenterName: config.Datacenter,
 	}
 
-	// Om datacenter är specificerat, cacha det
+	// If datacenter is specified, cache it
 	if config.Datacenter != "" {
 		err = client.SetDatacenter(ctx, config.Datacenter)
 		if err != nil {
@@ -76,36 +76,36 @@ func ConnectWithPassword(ctx context.Context, config ConnectConfig) (*Client, er
 	return client, nil
 }
 
-// ConnectWithSSPI ansluter till vCenter med Windows SSPI/Kerberos authentication
-// Detta fungerar endast på Windows och använder den inloggade användarens credentials
-// Returnerar ErrSSPINotSupported på icke-Windows plattformar
+// ConnectWithSSPI connects to vCenter with Windows SSPI/Kerberos authentication
+// This only works on Windows and uses the logged-in user's credentials
+// Returns ErrSSPINotSupported on non-Windows platforms
 func ConnectWithSSPI(ctx context.Context, host string, insecure bool, datacenter string) (*Client, error) {
 	if host == "" {
 		return nil, &ValidationError{Field: "Host", Message: "host is required"}
 	}
 
-	// Använd go-vcenter-auth för SSPI login med session caching
+	// Use go-vcenter-auth for SSPI login with session caching
 	authClient, err := vcauth.LoginSSPI(ctx, host, insecure)
 	if err != nil {
 		return nil, &OperationError{Operation: "SSPI login", Err: err}
 	}
 
-	// Hämta vim25.Client från go-vcenter-auth
+	// Retrieve vim25.Client from go-vcenter-auth
 	vim25Client := authClient.GetVim()
 
-	// Skapa govmomi.Client från vim25.Client
+	// Create govmomi.Client from vim25.Client
 	govmomiClient := &govmomi.Client{
 		Client:         vim25Client,
 		SessionManager: session.NewManager(vim25Client),
 	}
 
-	// Skapa vår Client wrapper
+	// Create our Client wrapper
 	client := &Client{
 		Client:         govmomiClient,
 		datacenterName: datacenter,
 	}
 
-	// Om datacenter är specificerat, cacha det
+	// If datacenter is specified, cache it
 	if datacenter != "" {
 		err = client.SetDatacenter(ctx, datacenter)
 		if err != nil {
@@ -116,8 +116,8 @@ func ConnectWithSSPI(ctx context.Context, host string, insecure bool, datacenter
 	return client, nil
 }
 
-// ConnectWithURL ansluter till vCenter med en komplett URL (inkl credentials)
-// Använder standard govmomi utan go-vcenter-auth
+// ConnectWithURL connects to vCenter with a complete URL (including credentials)
+// Uses standard govmomi without go-vcenter-auth
 func ConnectWithURL(ctx context.Context, urlStr string, insecure bool, datacenter string) (*Client, error) {
 	if urlStr == "" {
 		return nil, &ValidationError{Field: "URL", Message: "URL is required"}
@@ -148,7 +148,7 @@ func ConnectWithURL(ctx context.Context, urlStr string, insecure bool, datacente
 	return client, nil
 }
 
-// SetDatacenter sätter datacenter för klienten och cachar finder
+// SetDatacenter sets the datacenter for the client and caches the finder
 func (c *Client) SetDatacenter(ctx context.Context, datacenterName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -167,8 +167,8 @@ func (c *Client) SetDatacenter(ctx context.Context, datacenterName string) error
 	return nil
 }
 
-// GetFinder returnerar en finder för det cachade datacentret
-// Om inget datacenter är cachat, skapas en ny finder utan datacenter-context
+// GetFinder returns a finder for the cached datacenter
+// If no datacenter is cached, a new finder is created without datacenter context
 func (c *Client) GetFinder() *find.Finder {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -180,21 +180,21 @@ func (c *Client) GetFinder() *find.Finder {
 	return find.NewFinder(c.Client.Client, true)
 }
 
-// GetDatacenter returnerar det cachade datacentret
+// GetDatacenter returns the cached datacenter
 func (c *Client) GetDatacenter() *object.Datacenter {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.datacenter
 }
 
-// GetDatacenterName returnerar namnet på det cachade datacentret
+// GetDatacenterName returns the name of the cached datacenter
 func (c *Client) GetDatacenterName() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.datacenterName
 }
 
-// Logout loggar ut från vCenter och stänger klienten
+// Logout logs out from vCenter and closes the client
 func (c *Client) Logout(ctx context.Context) error {
 	err := c.Client.Logout(ctx)
 	if err != nil {

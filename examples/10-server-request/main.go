@@ -8,11 +8,11 @@ import (
 	"github.com/skabbio1976/vcenter"
 )
 
-// Detta exempel visar hur man använder ServerRequest för strukturerad VM-konfiguration.
+// This example demonstrates how to use ServerRequest for structured VM configuration.
 func main() {
 	ctx := context.Background()
 
-	// Anslut till vCenter
+	// Connect to vCenter
 	config := vcenter.ConnectConfig{
 		Host:       "vcenter.example.com",
 		Username:   "administrator@vsphere.local",
@@ -27,7 +27,7 @@ func main() {
 	}
 	defer client.Logout(ctx)
 
-	// Skapa en ServerRequest med statisk IP
+	// Create a ServerRequest with static IP
 	req := vcenter.ServerRequest{
 		Name:        "AppServer01",
 		Template:    "Windows-2022-Template",
@@ -42,16 +42,16 @@ func main() {
 		DNSSuffixes: []string{"example.com", "local"},
 	}
 
-	// Validera request
+	// Validate request
 	if err := req.Validate(); err != nil {
-		log.Fatalf("Valideringsfel: %v", err)
+		log.Fatalf("Validation error: %v", err)
 	}
 
-	log.Printf("Klonar %s från %s...\n", req.Name, req.Template)
+	log.Printf("Cloning %s from %s...\n", req.Name, req.Template)
 	log.Printf("  CPU: %d, RAM: %dGB", req.CPUs, req.MemoryGB)
 	log.Printf("  IP: %s, Gateway: %s", req.IPAddress, req.Gateway)
 
-	// Klona VM med ServerRequest
+	// Clone VM with ServerRequest
 	vm, err := vcenter.CloneFromRequest(
 		ctx,
 		client.Client,
@@ -66,13 +66,13 @@ func main() {
 		85, // Timezone
 	)
 	if err != nil {
-		log.Fatalf("Misslyckades att klona: %v", err)
+		log.Fatalf("Failed to clone: %v", err)
 	}
 
-	log.Printf("✓ VM klonad: %s", vm.Name())
+	log.Printf("✓ VM cloned: %s", vm.Name())
 
-	// Vänta på IP och Tools
-	log.Println("Väntar på VMware Tools och IP-konfiguration...")
+	// Wait for IP and Tools
+	log.Println("Waiting for VMware Tools and IP configuration...")
 	err = vcenter.WaitForTools(ctx, vm)
 	if err != nil {
 		log.Printf("Warning: %v", err)
@@ -84,11 +84,11 @@ func main() {
 	} else {
 		log.Printf("✓ VM IP: %s", ip)
 		if ip == req.IPAddress {
-			log.Println("✓ IP-adressen matchar konfigurationen")
+			log.Println("✓ IP address matches configuration")
 		}
 	}
 
-	log.Println("\n✓ Server klar att användas!")
+	log.Println("\n✓ Server ready to use!")
 	log.Printf("  Hostname: %s.%s", req.Name, req.Domain)
 	log.Printf("  IP: %s", req.IPAddress)
 	log.Printf("  CPU: %d, RAM: %dGB", req.CPUs, req.MemoryGB)

@@ -8,11 +8,11 @@ import (
 	"github.com/vmware/govmomi/object"
 )
 
-// Detta exempel visar hur man utför power-operationer på flera VMs parallellt.
+// This example demonstrates how to perform power operations on multiple VMs in parallel.
 func main() {
 	ctx := context.Background()
 
-	// Anslut till vCenter
+	// Connect to vCenter
 	config := vcenter.ConnectConfig{
 		Host:       "vcenter.example.com",
 		Username:   "administrator@vsphere.local",
@@ -27,7 +27,7 @@ func main() {
 	}
 	defer client.Logout(ctx)
 
-	// Lista med VM-namn att hantera
+	// List of VM names to manage
 	vmNames := []string{
 		"WebServer01",
 		"WebServer02",
@@ -35,25 +35,25 @@ func main() {
 		"AppServer01",
 	}
 
-	// Hitta alla VMs
-	log.Println("Hittar VMs...")
+	// Find all VMs
+	log.Println("Finding VMs...")
 	var vms []*object.VirtualMachine
 	for _, name := range vmNames {
 		vm, err := vcenter.GetVM(ctx, client.Client, name, "Datacenter1")
 		if err != nil {
-			log.Printf("Warning: Kunde inte hitta %s: %v", name, err)
+			log.Printf("Warning: Could not find %s: %v", name, err)
 			continue
 		}
 		vms = append(vms, vm)
-		log.Printf("✓ Hittade: %s", name)
+		log.Printf("✓ Found: %s", name)
 	}
 
 	if len(vms) == 0 {
-		log.Fatal("Inga VMs hittades")
+		log.Fatal("No VMs found")
 	}
 
-	// Starta alla VMs parallellt
-	log.Printf("\nStartar %d VMs parallellt...", len(vms))
+	// Power on all VMs in parallel
+	log.Printf("\nStarting %d VMs in parallel...", len(vms))
 	errors := vcenter.BulkPowerOperation(ctx, vms, "on")
 
 	successCount := 0
@@ -61,14 +61,14 @@ func main() {
 		if err != nil {
 			log.Printf("✗ %s: %v", vmNames[i], err)
 		} else {
-			log.Printf("✓ %s: Startad", vmNames[i])
+			log.Printf("✓ %s: Started", vmNames[i])
 			successCount++
 		}
 	}
 
-	log.Printf("\n✓ %d/%d VMs startades framgångsrikt", successCount, len(vms))
+	log.Printf("\n✓ %d/%d VMs started successfully", successCount, len(vms))
 
-	// Exempel på andra operationer:
-	// errors = vcenter.BulkPowerOperation(ctx, vms, "off")     // Stäng av alla
-	// errors = vcenter.BulkPowerOperation(ctx, vms, "restart") // Starta om alla
+	// Examples of other operations:
+	// errors = vcenter.BulkPowerOperation(ctx, vms, "off")     // Power off all
+	// errors = vcenter.BulkPowerOperation(ctx, vms, "restart") // Restart all
 }

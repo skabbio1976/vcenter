@@ -8,11 +8,11 @@ import (
 	"github.com/skabbio1976/vcenter"
 )
 
-// Detta exempel visar hur man klonar en Windows VM med domain join och DHCP.
+// This example demonstrates how to clone a Windows VM with domain join and DHCP.
 func main() {
 	ctx := context.Background()
 
-	// Anslut till vCenter
+	// Connect to vCenter
 	config := vcenter.ConnectConfig{
 		Host:       "vcenter.example.com",
 		Username:   "administrator@vsphere.local",
@@ -27,7 +27,7 @@ func main() {
 	}
 	defer client.Logout(ctx)
 
-	// Skapa Windows customization spec med DHCP
+	// Create Windows customization spec with DHCP
 	customization := vcenter.NewWindowsCustomization(
 		"WebServer01",                    // Computer name
 		"example.com",                    // AD Domain
@@ -39,9 +39,9 @@ func main() {
 		[]string{"example.com"},          // DNS suffixes
 	)
 
-	log.Println("Startar kloning med Windows customization...")
+	log.Println("Starting clone with Windows customization...")
 
-	// Klona VM med customization
+	// Clone VM with customization
 	vm, err := vcenter.CloneVMWithCustomization(
 		ctx,
 		client.Client,
@@ -54,23 +54,23 @@ func main() {
 		customization,
 	)
 	if err != nil {
-		log.Fatalf("Misslyckades att klona VM: %v", err)
+		log.Fatalf("Failed to clone VM: %v", err)
 	}
 
-	log.Printf("✓ VM klonad: %s", vm.Name())
-	log.Println("VM startar automatiskt för customization...")
+	log.Printf("✓ VM cloned: %s", vm.Name())
+	log.Println("VM starts automatically for customization...")
 
-	// Vänta på VMware Tools
-	log.Println("Väntar på VMware Tools...")
+	// Wait for VMware Tools
+	log.Println("Waiting for VMware Tools...")
 	err = vcenter.WaitForTools(ctx, vm)
 	if err != nil {
 		log.Printf("Warning: VMware Tools timeout: %v", err)
 	} else {
-		log.Println("✓ VMware Tools är redo")
+		log.Println("✓ VMware Tools is ready")
 	}
 
-	// Vänta på IP-adress
-	log.Println("Väntar på IP-adress...")
+	// Wait for IP address
+	log.Println("Waiting for IP address...")
 	ip, err := vcenter.WaitForIP(ctx, vm, 10*time.Minute)
 	if err != nil {
 		log.Printf("Warning: IP timeout: %v", err)
@@ -78,5 +78,5 @@ func main() {
 		log.Printf("✓ VM IP: %s", ip)
 	}
 
-	log.Println("✓ Klart! VM är nu domain-joinad och redo att använda")
+	log.Println("✓ Done! VM is now domain-joined and ready to use")
 }
