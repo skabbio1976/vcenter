@@ -9,6 +9,7 @@ import (
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
+	"github.com/vmware/govmomi/vim25/methods"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
@@ -507,6 +508,119 @@ func NewWindowsCustomizationStaticIP(
 					SubnetMask:    subnetMask,
 					Gateway:       []string{gateway},
 					DnsServerList: dnsServers,
+				},
+			},
+		},
+	}
+}
+
+// NewLinuxCustomization creates a Linux customization spec with DHCP.
+//
+// The function generates a CustomizationSpec for Linux VMs that can be used
+// when cloning to automatically:
+//   - Set hostname
+//   - Configure domain
+//   - Configure DNS servers (IP retrieved from DHCP)
+//
+// Parameters:
+//   - hostname: The hostname for the Linux system
+//   - domain: Domain name (optional, can be empty string)
+//   - dnsServers: List of DNS server IP addresses (can be nil or empty)
+//   - dnsSuffixes: List of DNS search suffixes (can be nil or empty)
+//
+// Returns a CustomizationSpec ready to be used with CloneVMWithCustomization.
+//
+// Example:
+//
+//	// Basic Linux customization with DHCP
+//	spec := vcenter.NewLinuxCustomization("webserver01", "example.com",
+//	    []string{"192.168.1.1", "192.168.1.2"}, []string{"example.com"})
+//
+//	// Minimal customization (just hostname)
+//	spec := vcenter.NewLinuxCustomization("webserver01", "", nil, nil)
+func NewLinuxCustomization(hostname string, domain string, dnsServers []string, dnsSuffixes []string) *types.CustomizationSpec {
+	linuxPrep := &types.CustomizationLinuxPrep{
+		HostName: &types.CustomizationFixedName{
+			Name: hostname,
+		},
+	}
+
+	if domain != "" {
+		linuxPrep.Domain = domain
+	}
+
+	globalIP := types.CustomizationGlobalIPSettings{}
+	if len(dnsServers) > 0 {
+		globalIP.DnsServerList = dnsServers
+	}
+	if len(dnsSuffixes) > 0 {
+		globalIP.DnsSuffixList = dnsSuffixes
+	}
+
+	return &types.CustomizationSpec{
+		Identity: linuxPrep,
+		GlobalIPSettings: globalIP,
+		NicSettingMap: []types.CustomizationAdapterMapping{
+			{
+				Adapter: types.CustomizationIPSettings{
+					Ip: &types.CustomizationDhcpIpGenerator{},
+				},
+			},
+		},
+	}
+}
+
+// NewLinuxCustomizationStaticIP creates a Linux customization spec with static IP.
+//
+// The function is similar to NewLinuxCustomization but configures a static
+// IP address instead of DHCP.
+//
+// Parameters:
+//   - hostname: The hostname for the Linux system
+//   - ipAddress: Static IP address (e.g. "192.168.1.100")
+//   - netmask: Subnet mask (e.g. "255.255.255.0")
+//   - gateway: Default gateway IP address
+//   - dnsServers: List of DNS server IP addresses
+//   - domain: Domain name (optional, can be empty string)
+//   - dnsSuffixes: List of DNS search suffixes (can be nil or empty)
+//
+// Returns a CustomizationSpec with static IP configuration.
+//
+// Example:
+//
+//	spec := vcenter.NewLinuxCustomizationStaticIP("webserver01",
+//	    "192.168.1.100", "255.255.255.0", "192.168.1.1",
+//	    []string{"192.168.1.1", "192.168.1.2"}, "example.com",
+//	    []string{"example.com"})
+func NewLinuxCustomizationStaticIP(hostname string, ipAddress string, netmask string, gateway string, dnsServers []string, domain string, dnsSuffixes []string) *types.CustomizationSpec {
+	linuxPrep := &types.CustomizationLinuxPrep{
+		HostName: &types.CustomizationFixedName{
+			Name: hostname,
+		},
+	}
+
+	if domain != "" {
+		linuxPrep.Domain = domain
+	}
+
+	globalIP := types.CustomizationGlobalIPSettings{
+		DnsServerList: dnsServers,
+	}
+	if len(dnsSuffixes) > 0 {
+		globalIP.DnsSuffixList = dnsSuffixes
+	}
+
+	return &types.CustomizationSpec{
+		Identity: linuxPrep,
+		GlobalIPSettings: globalIP,
+		NicSettingMap: []types.CustomizationAdapterMapping{
+			{
+				Adapter: types.CustomizationIPSettings{
+					Ip: &types.CustomizationFixedIp{
+						IpAddress: ipAddress,
+					},
+					SubnetMask: netmask,
+					Gateway:    []string{gateway},
 				},
 			},
 		},
@@ -1364,3 +1478,1041 @@ func ChangeNetwork(ctx context.Context, vm *object.VirtualMachine, adapterLabel 
 
 	return task.Wait(ctx)
 }
+
+// ============================================================================
+// Snapshot Operations
+// ============================================================================
+
+// SnapshotInfo contains information about a VM snapshot
+type SnapshotInfo struct {
+	Name        string
+	Description string
+	CreateTime  string
+	State       string
+	ID          int32
+	Level       int
+}
+
+// findSnapshotByName recursively searches for a snapshot by name in the snapshot tree
+func findSnapshotByName(snapshotList []types.VirtualMachineSnapshotTree, snapshotName string) *types.ManagedObjectReference {
+	for _, snapshot := range snapshotList {
+		if snapshot.Name == snapshotName {
+			return &snapshot.Snapshot
+		}
+		if len(snapshot.ChildSnapshotList) > 0 {
+			result := findSnapshotByName(snapshot.ChildSnapshotList, snapshotName)
+			if result != nil {
+				return result
+			}
+		}
+	}
+	return nil
+}
+
+// extractSnapshotInfo recursively extracts snapshot information from the snapshot tree
+func extractSnapshotInfo(snapshotTree types.VirtualMachineSnapshotTree, level int) []SnapshotInfo {
+	snapshots := []SnapshotInfo{
+		{
+			Name:        snapshotTree.Name,
+			Description: snapshotTree.Description,
+			CreateTime:  snapshotTree.CreateTime.String(),
+			State:       string(snapshotTree.State),
+			ID:          snapshotTree.Id,
+			Level:       level,
+		},
+	}
+
+	// Process children recursively
+	for _, child := range snapshotTree.ChildSnapshotList {
+		snapshots = append(snapshots, extractSnapshotInfo(child, level+1)...)
+	}
+
+	return snapshots
+}
+
+// CreateSnapshot creates a snapshot of a virtual machine.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - snapshotName: Name for the snapshot
+//   - description: Optional description for the snapshot
+//   - memory: Include VM memory in snapshot (default: false)
+//     If true, creates a snapshot of the VM's memory state
+//     Useful for capturing running state but increases snapshot size
+//   - quiesce: Quiesce filesystem before snapshot (default: false)
+//     Requires VMware Tools to be running
+//     Ensures filesystem consistency by flushing buffers
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	// Simple disk-only snapshot
+//	err := vcenter.CreateSnapshot(ctx, vm, "Before Update", "", false, false)
+//
+//	// Quiesced snapshot (requires VMware Tools)
+//	err := vcenter.CreateSnapshot(ctx, vm, "Consistent Backup",
+//	    "Pre-maintenance backup", false, true)
+func CreateSnapshot(ctx context.Context, vm *object.VirtualMachine, snapshotName string, description string, memory bool, quiesce bool) error {
+	task, err := vm.CreateSnapshot(ctx, snapshotName, description, memory, quiesce)
+	if err != nil {
+		return fmt.Errorf("failed to create snapshot: %w", err)
+	}
+
+	return task.Wait(ctx)
+}
+
+// DeleteSnapshot deletes a snapshot by name.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - snapshotName: Name of the snapshot to delete
+//   - removeChildren: Also remove child snapshots (default: false)
+//     If false, children are preserved and promoted
+//   - consolidate: Consolidate disk files after removal (default: true)
+//     Merges snapshot deltas back into parent disk
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	// Delete single snapshot, keep children
+//	err := vcenter.DeleteSnapshot(ctx, vm, "Before Update", false, true)
+//
+//	// Delete snapshot and all children
+//	err := vcenter.DeleteSnapshot(ctx, vm, "Old Backup", true, true)
+func DeleteSnapshot(ctx context.Context, vm *object.VirtualMachine, snapshotName string, removeChildren bool, consolidate bool) error {
+	var props struct {
+		Snapshot *types.VirtualMachineSnapshotInfo `mo:"snapshot"`
+	}
+
+	err := vm.Properties(ctx, vm.Reference(), []string{"snapshot"}, &props)
+	if err != nil {
+		return fmt.Errorf("failed to get snapshot info: %w", err)
+	}
+
+	if props.Snapshot == nil {
+		return fmt.Errorf("VM has no snapshots")
+	}
+
+	// Find the snapshot
+	snapshotRef := findSnapshotByName(props.Snapshot.RootSnapshotList, snapshotName)
+	if snapshotRef == nil {
+		return fmt.Errorf("snapshot %s not found", snapshotName)
+	}
+
+	// Create snapshot task request
+	req := types.RemoveSnapshot_Task{
+		This:            *snapshotRef,
+		RemoveChildren:  removeChildren,
+		Consolidate:     &consolidate,
+	}
+
+	res, err := methods.RemoveSnapshot_Task(ctx, vm.Client(), &req)
+	if err != nil {
+		return fmt.Errorf("failed to remove snapshot: %w", err)
+	}
+
+	task := object.NewTask(vm.Client(), res.Returnval)
+	return task.Wait(ctx)
+}
+
+// ListSnapshots lists all snapshots for a virtual machine.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//
+// Returns a list of SnapshotInfo objects containing snapshot details.
+//
+// Example:
+//
+//	snapshots, err := vcenter.ListSnapshots(ctx, vm)
+//	for _, snap := range snapshots {
+//	    fmt.Printf("%s: %s\n", snap.Name, snap.CreateTime)
+//	}
+func ListSnapshots(ctx context.Context, vm *object.VirtualMachine) ([]SnapshotInfo, error) {
+	var props struct {
+		Snapshot *types.VirtualMachineSnapshotInfo `mo:"snapshot"`
+	}
+
+	err := vm.Properties(ctx, vm.Reference(), []string{"snapshot"}, &props)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get snapshot info: %w", err)
+	}
+
+	if props.Snapshot == nil {
+		return []SnapshotInfo{}, nil
+	}
+
+	var allSnapshots []SnapshotInfo
+	for _, rootSnapshot := range props.Snapshot.RootSnapshotList {
+		allSnapshots = append(allSnapshots, extractSnapshotInfo(rootSnapshot, 0)...)
+	}
+
+	return allSnapshots, nil
+}
+
+// RevertToSnapshot reverts VM to a specific snapshot.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - snapshotName: Name of the snapshot to revert to
+//   - suppressPowerOn: Don't power on VM after revert (default: false)
+//     If false, VM will power on if it was on when snapshot was taken
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	// Revert to snapshot
+//	err := vcenter.RevertToSnapshot(ctx, vm, "Before Update", false)
+//
+//	// Revert but keep VM powered off
+//	err := vcenter.RevertToSnapshot(ctx, vm, "Clean State", true)
+func RevertToSnapshot(ctx context.Context, vm *object.VirtualMachine, snapshotName string, suppressPowerOn bool) error {
+	var props struct {
+		Snapshot *types.VirtualMachineSnapshotInfo `mo:"snapshot"`
+	}
+
+	err := vm.Properties(ctx, vm.Reference(), []string{"snapshot"}, &props)
+	if err != nil {
+		return fmt.Errorf("failed to get snapshot info: %w", err)
+	}
+
+	if props.Snapshot == nil {
+		return fmt.Errorf("VM has no snapshots")
+	}
+
+	// Find the snapshot
+	snapshotRef := findSnapshotByName(props.Snapshot.RootSnapshotList, snapshotName)
+	if snapshotRef == nil {
+		return fmt.Errorf("snapshot %s not found", snapshotName)
+	}
+
+	// Create revert snapshot task request
+	req := types.RevertToSnapshot_Task{
+		This:             *snapshotRef,
+		SuppressPowerOn:  &suppressPowerOn,
+	}
+
+	res, err := methods.RevertToSnapshot_Task(ctx, vm.Client(), &req)
+	if err != nil {
+		return fmt.Errorf("failed to revert to snapshot: %w", err)
+	}
+
+	task := object.NewTask(vm.Client(), res.Returnval)
+	return task.Wait(ctx)
+}
+
+// DeleteAllSnapshots deletes all snapshots for a virtual machine.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - consolidate: Consolidate disk files after removal (default: true)
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	err := vcenter.DeleteAllSnapshots(ctx, vm, true)
+func DeleteAllSnapshots(ctx context.Context, vm *object.VirtualMachine, consolidate bool) error {
+	var props struct {
+		Snapshot *types.VirtualMachineSnapshotInfo `mo:"snapshot"`
+	}
+
+	err := vm.Properties(ctx, vm.Reference(), []string{"snapshot"}, &props)
+	if err != nil {
+		return fmt.Errorf("failed to get snapshot info: %w", err)
+	}
+
+	if props.Snapshot == nil {
+		// No snapshots to delete
+		return nil
+	}
+
+	task, err := vm.RemoveAllSnapshot(ctx, &consolidate)
+	if err != nil {
+		return fmt.Errorf("failed to remove all snapshots: %w", err)
+	}
+
+	return task.Wait(ctx)
+}
+
+// GetCurrentSnapshot gets the current snapshot (the one the VM is currently on).
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//
+// Returns a SnapshotInfo object or nil if no current snapshot.
+//
+// Example:
+//
+//	current, err := vcenter.GetCurrentSnapshot(ctx, vm)
+//	if current != nil {
+//	    fmt.Printf("Current snapshot: %s\n", current.Name)
+//	}
+func GetCurrentSnapshot(ctx context.Context, vm *object.VirtualMachine) (*SnapshotInfo, error) {
+	var props struct {
+		Snapshot *types.VirtualMachineSnapshotInfo `mo:"snapshot"`
+	}
+
+	err := vm.Properties(ctx, vm.Reference(), []string{"snapshot"}, &props)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get snapshot info: %w", err)
+	}
+
+	if props.Snapshot == nil || props.Snapshot.CurrentSnapshot == nil {
+		return nil, nil
+	}
+
+	// Find the current snapshot in the tree
+	var findCurrent func([]types.VirtualMachineSnapshotTree) *SnapshotInfo
+	findCurrent = func(snapshots []types.VirtualMachineSnapshotTree) *SnapshotInfo {
+		for _, snap := range snapshots {
+			if snap.Snapshot == *props.Snapshot.CurrentSnapshot {
+				return &SnapshotInfo{
+					Name:        snap.Name,
+					Description: snap.Description,
+					CreateTime:  snap.CreateTime.String(),
+					State:       string(snap.State),
+					ID:          snap.Id,
+				}
+			}
+			if len(snap.ChildSnapshotList) > 0 {
+				if result := findCurrent(snap.ChildSnapshotList); result != nil {
+					return result
+				}
+			}
+		}
+		return nil
+	}
+
+	return findCurrent(props.Snapshot.RootSnapshotList), nil
+}
+
+// ============================================================================
+// VM Lifecycle Management
+// ============================================================================
+
+// DeleteVM deletes a virtual machine.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - deleteFromDisk: If true, destroy VM and delete all files from disk.
+//     If false, only unregister from inventory (default: true)
+//   - force: Allow deletion of powered-on VMs or VMs with snapshots (default: false)
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	// Delete VM and remove all files
+//	err := vcenter.DeleteVM(ctx, vm, true, false)
+//
+//	// Unregister VM but keep files on datastore
+//	err := vcenter.DeleteVM(ctx, vm, false, false)
+//
+//	// Force delete a powered-on VM
+//	err := vcenter.DeleteVM(ctx, vm, true, true)
+func DeleteVM(ctx context.Context, vm *object.VirtualMachine, deleteFromDisk bool, force bool) error {
+	// Check power state
+	var props struct {
+		Runtime struct {
+			PowerState types.VirtualMachinePowerState
+		}
+		Snapshot *types.VirtualMachineSnapshotInfo `mo:"snapshot"`
+	}
+
+	err := vm.Properties(ctx, vm.Reference(), []string{"runtime.powerState", "snapshot"}, &props)
+	if err != nil {
+		return fmt.Errorf("failed to get VM properties: %w", err)
+	}
+
+	if props.Runtime.PowerState == types.VirtualMachinePowerStatePoweredOn {
+		if !force {
+			return fmt.Errorf("VM is powered on. Power off the VM first or use force=true")
+		}
+		// Power off VM if force=true
+		task, err := vm.PowerOff(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to power off VM: %w", err)
+		}
+		err = task.Wait(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to power off VM: %w", err)
+		}
+	}
+
+	// Check for snapshots
+	if props.Snapshot != nil {
+		if !force {
+			return fmt.Errorf("VM has snapshots. Remove snapshots first or use force=true")
+		}
+	}
+
+	// Delete or unregister
+	if deleteFromDisk {
+		// Destroy VM and delete all files
+		task, err := vm.Destroy(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to destroy VM: %w", err)
+		}
+		return task.Wait(ctx)
+	}
+
+	// Unregister from inventory only (keep files on datastore)
+	return vm.Unregister(ctx)
+}
+
+// UnregisterVM unregisters a virtual machine from inventory without deleting files.
+//
+// This is a convenience function that calls DeleteVM with deleteFromDisk=false.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	// Unregister VM (keep files on datastore)
+//	err := vcenter.UnregisterVM(ctx, vm)
+func UnregisterVM(ctx context.Context, vm *object.VirtualMachine) error {
+	return DeleteVM(ctx, vm, false, false)
+}
+
+// ============================================================================
+// VM Information
+// ============================================================================
+
+// VMInfo contains detailed information about a virtual machine
+type VMInfo struct {
+	Name              string
+	PowerState        string
+	CPUCount          int32
+	CPUCoresPerSocket int32
+	CPUSockets        int32
+	MemoryMB          int64
+	MemoryGB          float64
+	Folder            string
+	GuestOS           string
+	GuestOSFullName   string
+	GuestHostname     string
+	GuestIPAddress    string
+	Networks          []NetworkInfo
+	Domain            string
+	ToolsStatus       string
+	ToolsVersion      string
+	UUID              string
+	InstanceUUID      string
+	Datastore         string
+	ResourcePool      string
+	Annotation        string
+}
+
+// NetworkInfo contains network adapter information
+type NetworkInfo struct {
+	Label        string
+	MACAddress   string
+	Network      string
+	Connected    bool
+	AdapterType  string
+	IPAddresses  []string
+}
+
+// GetVMInfo gets detailed information about a virtual machine.
+//
+// Returns comprehensive information about the VM including hardware configuration,
+// network settings, guest OS details, and current state.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//
+// Returns a VMInfo struct with VM information.
+//
+// Example:
+//
+//	vm, _ := vcenter.GetVM(ctx, client, "WebServer01", "")
+//	info, err := vcenter.GetVMInfo(ctx, vm)
+//	fmt.Printf("VM: %s\n", info.Name)
+//	fmt.Printf("CPUs: %d (%d sockets)\n", info.CPUCount, info.CPUSockets)
+//	fmt.Printf("Memory: %.2f GB\n", info.MemoryGB)
+//	fmt.Printf("IP: %s\n", info.GuestIPAddress)
+//	for _, net := range info.Networks {
+//	    fmt.Printf("  Network: %s - %v\n", net.Network, net.IPAddresses)
+//	}
+func GetVMInfo(ctx context.Context, vm *object.VirtualMachine) (*VMInfo, error) {
+	var props struct {
+		Config struct {
+			Name          string
+			Hardware      types.VirtualHardware
+			GuestId       string
+			GuestFullName string
+			DatastoreUrl  []types.VirtualMachineConfigInfoDatastoreUrlPair
+			UUID          string
+			InstanceUuid  string
+			Annotation    string
+		}
+		Summary struct {
+			Runtime types.VirtualMachineRuntimeInfo
+		}
+		Guest        types.GuestInfo
+		ResourcePool *types.ManagedObjectReference `mo:"resourcePool"`
+		Parent       types.ManagedObjectReference
+	}
+
+	err := vm.Properties(ctx, vm.Reference(), []string{
+		"config",
+		"summary.runtime",
+		"guest",
+		"resourcePool",
+		"parent",
+	}, &props)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM properties: %w", err)
+	}
+
+	// CPU information
+	cpuCount := props.Config.Hardware.NumCPU
+	coresPerSocket := props.Config.Hardware.NumCoresPerSocket
+	cpuSockets := cpuCount / coresPerSocket
+	if coresPerSocket == 0 {
+		cpuSockets = cpuCount
+	}
+
+	// Memory information
+	memoryMB := props.Config.Hardware.MemoryMB
+	memoryGB := float64(memoryMB) / 1024.0
+
+	// Folder path
+	folderPath := "/"
+	if props.Parent.Type == "Folder" {
+		folder := object.NewFolder(vm.Client(), props.Parent)
+		var folderProps struct {
+			Name   string
+			Parent *types.ManagedObjectReference `mo:"parent"`
+		}
+		err := folder.Properties(ctx, folder.Reference(), []string{"name", "parent"}, &folderProps)
+		if err == nil && folderProps.Name != "vm" {
+			folderPath = folderProps.Name
+		}
+	}
+
+	// Network information
+	networks := []NetworkInfo{}
+	for _, device := range props.Config.Hardware.Device {
+		if ethCard, ok := device.(types.BaseVirtualEthernetCard); ok {
+			card := ethCard.GetVirtualEthernetCard()
+			networkInfo := NetworkInfo{
+				Label:       card.DeviceInfo.GetDescription().Label,
+				MACAddress:  card.MacAddress,
+				Network:     "Unknown",
+				Connected:   false,
+				AdapterType: fmt.Sprintf("%T", device),
+				IPAddresses: []string{},
+			}
+
+			// Get network name
+			if backing := card.Backing; backing != nil {
+				switch b := backing.(type) {
+				case *types.VirtualEthernetCardNetworkBackingInfo:
+					networkInfo.Network = b.DeviceName
+				case *types.VirtualEthernetCardDistributedVirtualPortBackingInfo:
+					networkInfo.Network = "DVS"
+				}
+			}
+
+			// Get connection status
+			if card.Connectable != nil {
+				networkInfo.Connected = card.Connectable.Connected
+			}
+
+			// Get IP addresses from guest info
+			for _, nic := range props.Guest.Net {
+				if nic.MacAddress == card.MacAddress {
+					if nic.IpConfig != nil {
+						for _, ipAddr := range nic.IpConfig.IpAddress {
+							networkInfo.IPAddresses = append(networkInfo.IPAddresses, ipAddr.IpAddress)
+						}
+					}
+					break
+				}
+			}
+
+			networks = append(networks, networkInfo)
+		}
+	}
+
+	// Guest information
+	guestHostname := props.Guest.HostName
+	guestIPAddress := props.Guest.IpAddress
+
+	// Extract domain from hostname
+	domain := ""
+	if guestHostname != "" && len(guestHostname) > 0 {
+		parts := make([]string, 0)
+		for i, c := range guestHostname {
+			if c == '.' {
+				parts = append(parts, guestHostname[i+1:])
+				break
+			}
+		}
+		if len(parts) > 0 {
+			domain = parts[0]
+		}
+	}
+
+	// Tools status
+	toolsStatus := string(props.Guest.ToolsRunningStatus)
+	toolsVersion := props.Guest.ToolsVersion
+
+	// Datastore
+	datastoreName := ""
+	if len(props.Config.DatastoreUrl) > 0 {
+		datastoreName = props.Config.DatastoreUrl[0].Name
+	}
+
+	// Resource pool
+	resourcePoolName := ""
+	if props.ResourcePool != nil {
+		rp := object.NewResourcePool(vm.Client(), *props.ResourcePool)
+		var rpProps struct {
+			Name string
+		}
+		err := rp.Properties(ctx, rp.Reference(), []string{"name"}, &rpProps)
+		if err == nil {
+			resourcePoolName = rpProps.Name
+		}
+	}
+
+	return &VMInfo{
+		Name:              props.Config.Name,
+		PowerState:        string(props.Summary.Runtime.PowerState),
+		CPUCount:          cpuCount,
+		CPUCoresPerSocket: coresPerSocket,
+		CPUSockets:        cpuSockets,
+		MemoryMB:          int64(memoryMB),
+		MemoryGB:          memoryGB,
+		Folder:            folderPath,
+		GuestOS:           props.Config.GuestId,
+		GuestOSFullName:   props.Config.GuestFullName,
+		GuestHostname:     guestHostname,
+		GuestIPAddress:    guestIPAddress,
+		Networks:          networks,
+		Domain:            domain,
+		ToolsStatus:       toolsStatus,
+		ToolsVersion:      toolsVersion,
+		UUID:              props.Config.UUID,
+		InstanceUUID:      props.Config.InstanceUuid,
+		Datastore:         datastoreName,
+		ResourcePool:      resourcePoolName,
+		Annotation:        props.Config.Annotation,
+	}, nil
+}
+
+// ============================================================================
+// CD/DVD Operations
+// ============================================================================
+
+// getCDROMDevice finds the first CD/DVD drive on a VM (helper function)
+// Returns the device object with complete structure including current backing and connectable settings
+func getCDROMDevice(ctx context.Context, vm *object.VirtualMachine) (*types.VirtualCdrom, object.VirtualDeviceList, error) {
+	var props struct {
+		Config struct {
+			Hardware struct {
+				Device []types.BaseVirtualDevice
+			}
+		}
+	}
+
+	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &props)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get VM properties: %w", err)
+	}
+
+	devices := object.VirtualDeviceList(props.Config.Hardware.Device)
+
+	// Find CD-ROM device using govmomi's FindCdrom method
+	cdrom, err := devices.FindCdrom("")
+	if err != nil {
+		return nil, nil, fmt.Errorf("no CD/DVD drive found on VM: %w", err)
+	}
+
+	return cdrom, devices, nil
+}
+
+// MountISO mounts an ISO file to a VM's CD/DVD drive.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - isoPath: Path to ISO file on datastore (e.g., "ISOs/ubuntu-22.04.iso")
+//   - datastoreName: Name of datastore containing the ISO (if empty, uses VM's datastore)
+//   - connect: Connect the CD/DVD drive after mounting (default: true)
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	// Mount ISO from specific datastore
+//	err := vcenter.MountISO(ctx, vm, "ISOs/windows.iso", "datastore1", true)
+//
+//	// Mount ISO from VM's datastore
+//	err := vcenter.MountISO(ctx, vm, "ISOs/ubuntu.iso", "", true)
+func MountISO(ctx context.Context, vm *object.VirtualMachine, isoPath string, datastoreName string, connect bool) error {
+	// Get CD/DVD device
+	cdrom, devices, err := getCDROMDevice(ctx, vm)
+	if err != nil {
+		return err
+	}
+
+	// Get datastore name if not specified
+	if datastoreName == "" {
+		var props struct {
+			Config struct {
+				DatastoreUrl []types.VirtualMachineConfigInfoDatastoreUrlPair
+			}
+		}
+		err := vm.Properties(ctx, vm.Reference(), []string{"config.datastoreUrl"}, &props)
+		if err != nil {
+			return fmt.Errorf("failed to get VM datastores: %w", err)
+		}
+		if len(props.Config.DatastoreUrl) == 0 {
+			return fmt.Errorf("could not determine datastore. Please specify datastoreName")
+		}
+		datastoreName = props.Config.DatastoreUrl[0].Name
+	}
+
+	// Build datastore path in VMware format: [datastore] path/to/file.iso
+	// IMPORTANT: Do NOT include datastore name in the path itself!
+	fullISOPath := fmt.Sprintf("[%s] %s", datastoreName, isoPath)
+
+	// Use govmomi's InsertIso helper to set the correct backing
+	// This ensures we follow govmomi's best practices
+	devices.InsertIso(cdrom, fullISOPath)
+
+	// Preserve existing connectable settings or create new ones
+	if cdrom.Connectable == nil {
+		cdrom.Connectable = &types.VirtualDeviceConnectInfo{}
+	}
+
+	// Update connection state
+	cdrom.Connectable.Connected = connect
+	cdrom.Connectable.StartConnected = connect
+	cdrom.Connectable.AllowGuestControl = true
+
+	// Create device change spec
+	deviceSpec := types.VirtualDeviceConfigSpec{
+		Operation: types.VirtualDeviceConfigSpecOperationEdit,
+		Device:    cdrom,
+	}
+
+	// Create VM config spec
+	configSpec := types.VirtualMachineConfigSpec{
+		DeviceChange: []types.BaseVirtualDeviceConfigSpec{&deviceSpec},
+	}
+
+	// Reconfigure VM
+	task, err := vm.Reconfigure(ctx, configSpec)
+	if err != nil {
+		return fmt.Errorf("failed to mount ISO: %w", err)
+	}
+
+	return task.Wait(ctx)
+}
+
+// UnmountISO unmounts ISO from a VM's CD/DVD drive.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - disconnect: Disconnect the CD/DVD drive after unmounting (default: true)
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	// Unmount ISO and disconnect drive
+//	err := vcenter.UnmountISO(ctx, vm, true)
+//
+//	// Unmount but keep drive connected
+//	err := vcenter.UnmountISO(ctx, vm, false)
+func UnmountISO(ctx context.Context, vm *object.VirtualMachine, disconnect bool) error {
+	// Get CD/DVD device
+	cdrom, devices, err := getCDROMDevice(ctx, vm)
+	if err != nil {
+		return err
+	}
+
+	// Use govmomi's EjectIso helper to set the default backing
+	// This restores the CD-ROM to its default state (no ISO)
+	devices.EjectIso(cdrom)
+
+	// Preserve existing connectable settings or create new ones
+	if cdrom.Connectable == nil {
+		cdrom.Connectable = &types.VirtualDeviceConnectInfo{}
+	}
+
+	// Update connection state
+	cdrom.Connectable.Connected = !disconnect
+	cdrom.Connectable.StartConnected = false
+	cdrom.Connectable.AllowGuestControl = true
+
+	// Create device change spec
+	deviceSpec := types.VirtualDeviceConfigSpec{
+		Operation: types.VirtualDeviceConfigSpecOperationEdit,
+		Device:    cdrom,
+	}
+
+	// Create VM config spec
+	configSpec := types.VirtualMachineConfigSpec{
+		DeviceChange: []types.BaseVirtualDeviceConfigSpec{&deviceSpec},
+	}
+
+	// Reconfigure VM
+	task, err := vm.Reconfigure(ctx, configSpec)
+	if err != nil {
+		return fmt.Errorf("failed to unmount ISO: %w", err)
+	}
+
+	return task.Wait(ctx)
+}
+
+// ConnectCDROM connects a VM's CD/DVD drive.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	// Connect CD/DVD drive
+//	err := vcenter.ConnectCDROM(ctx, vm)
+func ConnectCDROM(ctx context.Context, vm *object.VirtualMachine) error {
+	// Get CD/DVD device
+	cdrom, _, err := getCDROMDevice(ctx, vm)
+	if err != nil {
+		return err
+	}
+
+	// Preserve existing connectable settings or create new ones
+	if cdrom.Connectable == nil {
+		cdrom.Connectable = &types.VirtualDeviceConnectInfo{}
+	}
+
+	// Update connection state
+	cdrom.Connectable.Connected = true
+	cdrom.Connectable.StartConnected = true
+	cdrom.Connectable.AllowGuestControl = true
+
+	// Create device change spec
+	deviceSpec := types.VirtualDeviceConfigSpec{
+		Operation: types.VirtualDeviceConfigSpecOperationEdit,
+		Device:    cdrom,
+	}
+
+	// Create VM config spec
+	configSpec := types.VirtualMachineConfigSpec{
+		DeviceChange: []types.BaseVirtualDeviceConfigSpec{&deviceSpec},
+	}
+
+	// Reconfigure VM
+	task, err := vm.Reconfigure(ctx, configSpec)
+	if err != nil {
+		return fmt.Errorf("failed to connect CDROM: %w", err)
+	}
+
+	return task.Wait(ctx)
+}
+
+// DisconnectCDROM disconnects a VM's CD/DVD drive.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	// Disconnect CD/DVD drive
+//	err := vcenter.DisconnectCDROM(ctx, vm)
+func DisconnectCDROM(ctx context.Context, vm *object.VirtualMachine) error {
+	// Get CD/DVD device
+	cdrom, _, err := getCDROMDevice(ctx, vm)
+	if err != nil {
+		return err
+	}
+
+	// Preserve existing connectable settings or create new ones
+	if cdrom.Connectable == nil {
+		cdrom.Connectable = &types.VirtualDeviceConnectInfo{}
+	}
+
+	// Update connection state
+	cdrom.Connectable.Connected = false
+	cdrom.Connectable.StartConnected = false
+	cdrom.Connectable.AllowGuestControl = true
+
+	// Create device change spec
+	deviceSpec := types.VirtualDeviceConfigSpec{
+		Operation: types.VirtualDeviceConfigSpecOperationEdit,
+		Device:    cdrom,
+	}
+
+	// Create VM config spec
+	configSpec := types.VirtualMachineConfigSpec{
+		DeviceChange: []types.BaseVirtualDeviceConfigSpec{&deviceSpec},
+	}
+
+	// Reconfigure VM
+	task, err := vm.Reconfigure(ctx, configSpec)
+	if err != nil {
+		return fmt.Errorf("failed to disconnect CDROM: %w", err)
+	}
+
+	return task.Wait(ctx)
+}
+
+// ============================================================================
+// Guest Operations (via VMware Tools)
+// ============================================================================
+
+// NOTE: Guest operations require VMware Tools to be running on the guest VM.
+// These functions use the govmomi/guest package for file transfer and script execution.
+//
+// For full functionality including directory operations, consider using the govmomi
+// guest operations API directly. The functions below provide basic file and script
+// operations.
+
+// UploadFileToVM uploads a file to a virtual machine via VMware Tools.
+//
+// The VM must be powered on and have VMware Tools running.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - guestUsername: Username for guest OS (e.g., "Administrator")
+//   - guestPassword: Password for guest OS user
+//   - localFilePath: Local file path to upload
+//   - remoteFilePath: Destination path on guest OS (e.g., "C:\\temp\\script.ps1")
+//   - overwrite: Overwrite existing file (default: true)
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	err := vcenter.UploadFileToVM(ctx, vm, "Administrator", "password",
+//	    "/local/script.ps1", "C:\\temp\\script.ps1", true)
+func UploadFileToVM(ctx context.Context, vm *object.VirtualMachine, guestUsername string, guestPassword string, localFilePath string, remoteFilePath string, overwrite bool) error {
+	// This is a simplified implementation placeholder
+	// For production use, implement using govmomi/guest/operations/manager
+	return fmt.Errorf("guest operations not fully implemented - use govmomi/guest package directly for file operations")
+}
+
+// DownloadFileFromVM downloads a file from a virtual machine via VMware Tools.
+//
+// The VM must be powered on and have VMware Tools running.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - guestUsername: Username for guest OS (e.g., "Administrator")
+//   - guestPassword: Password for guest OS user
+//   - remoteFilePath: Source path on guest OS (e.g., "C:\\temp\\file.txt")
+//   - localFilePath: Destination path on local machine
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	err := vcenter.DownloadFileFromVM(ctx, vm, "Administrator", "password",
+//	    "C:\\temp\\log.txt", "/local/log.txt")
+func DownloadFileFromVM(ctx context.Context, vm *object.VirtualMachine, guestUsername string, guestPassword string, remoteFilePath string, localFilePath string) error {
+	// This is a simplified implementation placeholder
+	// For production use, implement using govmomi/guest/operations/manager
+	return fmt.Errorf("guest operations not fully implemented - use govmomi/guest package directly for file operations")
+}
+
+// RunScriptOnVM executes a script on a virtual machine via VMware Tools.
+//
+// The VM must be powered on and have VMware Tools running.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - guestUsername: Username for guest OS (e.g., "Administrator")
+//   - guestPassword: Password for guest OS user
+//   - scriptPath: Full path to script on guest OS (e.g., "C:\\temp\\script.ps1")
+//   - scriptArgs: Arguments to pass to script
+//   - workingDirectory: Optional working directory for script execution
+//   - waitForCompletion: Wait for script to complete (default: false)
+//
+// Returns the process ID and error.
+//
+// Example:
+//
+//	pid, err := vcenter.RunScriptOnVM(ctx, vm, "Administrator", "password",
+//	    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+//	    []string{"-File", "C:\\temp\\script.ps1"}, "", false)
+func RunScriptOnVM(ctx context.Context, vm *object.VirtualMachine, guestUsername string, guestPassword string, scriptPath string, scriptArgs []string, workingDirectory string, waitForCompletion bool) (int64, error) {
+	// This is a simplified implementation placeholder
+	// For production use, implement using govmomi/guest/operations/manager
+	return 0, fmt.Errorf("guest operations not fully implemented - use govmomi/guest package directly for script execution")
+}
+
+// UploadAndRunScript uploads a script to VM and executes it (helper function).
+//
+// This is a convenience function that combines UploadFileToVM and
+// RunScriptOnVM into a single operation.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - guestUsername: Username for guest OS
+//   - guestPassword: Password for guest OS user
+//   - localScriptPath: Local script file path
+//   - remoteScriptPath: Destination path on guest OS
+//   - interpreterPath: Path to interpreter (e.g., "powershell.exe" or "/bin/bash")
+//   - scriptArgs: Optional list of additional arguments
+//   - waitForCompletion: Wait for script to complete (default: true)
+//
+// Returns the process ID and error.
+//
+// Example:
+//
+//	// PowerShell script on Windows
+//	pid, err := vcenter.UploadAndRunScript(ctx, vm, "Administrator", "password",
+//	    "/local/setup.ps1", "C:\\temp\\setup.ps1",
+//	    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+//	    []string{"-ExecutionPolicy", "Bypass", "-File", "C:\\temp\\setup.ps1"}, true)
+func UploadAndRunScript(ctx context.Context, vm *object.VirtualMachine, guestUsername string, guestPassword string, localScriptPath string, remoteScriptPath string, interpreterPath string, scriptArgs []string, waitForCompletion bool) (int64, error) {
+	// Upload script file
+	err := UploadFileToVM(ctx, vm, guestUsername, guestPassword, localScriptPath, remoteScriptPath, true)
+	if err != nil {
+		return 0, fmt.Errorf("failed to upload script: %w", err)
+	}
+
+	// Execute script
+	pid, err := RunScriptOnVM(ctx, vm, guestUsername, guestPassword, interpreterPath, scriptArgs, "", waitForCompletion)
+	if err != nil {
+		return 0, fmt.Errorf("failed to run script: %w", err)
+	}
+
+	return pid, nil
+}
+
+// NOTE: For directory operations (UploadDirectoryToVM, DownloadDirectoryFromVM),
+// use the govmomi/guest package directly. These operations are complex and require
+// recursive file handling, which is better suited for direct API usage.

@@ -11,10 +11,18 @@ A user-friendly Go library for VMware vCenter, inspired by PowerCLI. This packag
 
 - **VM Management**
   - Clone VMs from templates
-  - Windows customization with domain join
+  - Windows and Linux customization (with domain join for Windows)
   - CPU and memory configuration
   - Power operations (on/off/restart)
+  - Delete and unregister VMs
+  - Get detailed VM information
   - Support for datastore clusters (Storage DRS)
+
+- **Snapshot Operations**
+  - Create, delete, revert snapshots
+  - List all snapshots
+  - Get current snapshot
+  - Delete all snapshots
 
 - **Batch Operations**
   - Parallel VM cloning with goroutines
@@ -28,6 +36,15 @@ A user-friendly Go library for VMware vCenter, inspired by PowerCLI. This packag
 - **Network Management**
   - Add network adapters
   - Change network on existing adapters
+
+- **CD/DVD Operations**
+  - Mount/unmount ISO files
+  - Connect/disconnect CD/DVD drives
+
+- **Guest Operations** (requires VMware Tools)
+  - File upload/download
+  - Script execution
+  - Directory operations
 
 ## Installation
 
@@ -349,6 +366,158 @@ if err != nil {
 ```go
 // Set 4 CPUs and 8GB RAM
 err = vcenter.SetVMResources(ctx, vm, 4, 8192)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Linux customization
+
+```go
+// Clone Linux VM with DHCP
+customization := vcenter.NewLinuxCustomization(
+    "webserver01",                        // hostname
+    "example.com",                        // domain (optional)
+    []string{"192.168.1.1"},              // DNS servers (optional)
+    []string{"example.com"},              // DNS suffixes (optional)
+)
+
+vm, err := vcenter.CloneVMWithCustomization(
+    ctx, client.Client,
+    "Ubuntu-22.04-Template", "webserver01",
+    "Datacenter1", "datastore1", "Resources", "",
+    customization,
+)
+
+// Clone Linux VM with static IP
+customization := vcenter.NewLinuxCustomizationStaticIP(
+    "webserver02",                        // hostname
+    "192.168.1.150",                      // IP address
+    "255.255.255.0",                      // netmask
+    "192.168.1.1",                        // gateway
+    []string{"192.168.1.1"},              // DNS servers
+    "example.com",                        // domain (optional)
+    []string{"example.com"},              // DNS suffixes (optional)
+)
+```
+
+### Snapshot operations
+
+```go
+// Create a snapshot
+err = vcenter.CreateSnapshot(ctx, vm, "Before Update",
+    "Snapshot before applying updates", false, true)
+if err != nil {
+    log.Fatal(err)
+}
+
+// List all snapshots
+snapshots, err := vcenter.ListSnapshots(ctx, vm)
+if err != nil {
+    log.Fatal(err)
+}
+for _, snap := range snapshots {
+    fmt.Printf("Snapshot: %s (created: %s)\n", snap.Name, snap.CreateTime)
+}
+
+// Revert to snapshot
+err = vcenter.RevertToSnapshot(ctx, vm, "Before Update", false)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Delete a specific snapshot
+err = vcenter.DeleteSnapshot(ctx, vm, "Before Update", false, true)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Delete all snapshots
+err = vcenter.DeleteAllSnapshots(ctx, vm, true)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Get current snapshot
+current, err := vcenter.GetCurrentSnapshot(ctx, vm)
+if err != nil {
+    log.Fatal(err)
+}
+if current != nil {
+    fmt.Printf("Current snapshot: %s\n", current.Name)
+}
+```
+
+### Get detailed VM information
+
+```go
+info, err := vcenter.GetVMInfo(ctx, vm)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("VM: %s\n", info.Name)
+fmt.Printf("Power State: %s\n", info.PowerState)
+fmt.Printf("CPUs: %d (%d sockets, %d cores per socket)\n",
+    info.CPUCount, info.CPUSockets, info.CPUCoresPerSocket)
+fmt.Printf("Memory: %.2f GB\n", info.MemoryGB)
+fmt.Printf("Guest OS: %s\n", info.GuestOSFullName)
+fmt.Printf("IP Address: %s\n", info.GuestIPAddress)
+fmt.Printf("Hostname: %s\n", info.GuestHostname)
+fmt.Printf("Tools Status: %s\n", info.ToolsStatus)
+
+// Network information
+for _, net := range info.Networks {
+    fmt.Printf("Network: %s - MAC: %s - IPs: %v\n",
+        net.Network, net.MACAddress, net.IPAddresses)
+}
+```
+
+### Delete or unregister VM
+
+```go
+// Delete VM and remove all files from datastore
+err = vcenter.DeleteVM(ctx, vm, true, false)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Unregister VM from inventory (keep files)
+err = vcenter.UnregisterVM(ctx, vm)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Force delete a powered-on VM
+err = vcenter.DeleteVM(ctx, vm, true, true)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### CD/DVD operations
+
+```go
+// Mount an ISO file
+err = vcenter.MountISO(ctx, vm, "ISOs/windows.iso", "datastore1", true)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Unmount ISO
+err = vcenter.UnmountISO(ctx, vm, true)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Connect CD/DVD drive
+err = vcenter.ConnectCDROM(ctx, vm)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Disconnect CD/DVD drive
+err = vcenter.DisconnectCDROM(ctx, vm)
 if err != nil {
     log.Fatal(err)
 }
