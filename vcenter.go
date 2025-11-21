@@ -3,11 +3,16 @@ package vcenter
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
+	"github.com/vmware/govmomi/guest"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/vim25/methods"
 	"github.com/vmware/govmomi/vim25/types"
@@ -387,6 +392,18 @@ func NewWindowsCustomization(
 	dnsSuffixes []string,
 ) *types.CustomizationSpec {
 
+	identification := types.CustomizationIdentification{}
+	if domain != "" {
+		identification.JoinDomain = domain
+		identification.DomainAdmin = domainUser
+		identification.DomainAdminPassword = &types.CustomizationPassword{
+			Value:     domainPassword,
+			PlainText: true,
+		}
+	} else {
+		identification.JoinWorkgroup = "WORKGROUP"
+	}
+
 	return &types.CustomizationSpec{
 		Identity: &types.CustomizationSysprep{
 			GuiUnattended: types.CustomizationGuiUnattended{
@@ -405,14 +422,7 @@ func NewWindowsCustomization(
 					Name: computerName,
 				},
 			},
-			Identification: types.CustomizationIdentification{
-				JoinDomain:  domain,
-				DomainAdmin: domainUser,
-				DomainAdminPassword: &types.CustomizationPassword{
-					Value:     domainPassword,
-					PlainText: true,
-				},
-			},
+			Identification: identification,
 		},
 		GlobalIPSettings: types.CustomizationGlobalIPSettings{
 			DnsServerList: dnsServers,
@@ -468,6 +478,18 @@ func NewWindowsCustomizationStaticIP(
 	dnsSuffixes []string,
 ) *types.CustomizationSpec {
 
+	identification := types.CustomizationIdentification{}
+	if domain != "" {
+		identification.JoinDomain = domain
+		identification.DomainAdmin = domainUser
+		identification.DomainAdminPassword = &types.CustomizationPassword{
+			Value:     domainPassword,
+			PlainText: true,
+		}
+	} else {
+		identification.JoinWorkgroup = "WORKGROUP"
+	}
+
 	return &types.CustomizationSpec{
 		Identity: &types.CustomizationSysprep{
 			GuiUnattended: types.CustomizationGuiUnattended{
@@ -486,14 +508,7 @@ func NewWindowsCustomizationStaticIP(
 					Name: computerName,
 				},
 			},
-			Identification: types.CustomizationIdentification{
-				JoinDomain:  domain,
-				DomainAdmin: domainUser,
-				DomainAdminPassword: &types.CustomizationPassword{
-					Value:     domainPassword,
-					PlainText: true,
-				},
-			},
+			Identification: identification,
 		},
 		GlobalIPSettings: types.CustomizationGlobalIPSettings{
 			DnsServerList: dnsServers,
@@ -558,7 +573,7 @@ func NewLinuxCustomization(hostname string, domain string, dnsServers []string, 
 	}
 
 	return &types.CustomizationSpec{
-		Identity: linuxPrep,
+		Identity:         linuxPrep,
 		GlobalIPSettings: globalIP,
 		NicSettingMap: []types.CustomizationAdapterMapping{
 			{
@@ -611,7 +626,7 @@ func NewLinuxCustomizationStaticIP(hostname string, ipAddress string, netmask st
 	}
 
 	return &types.CustomizationSpec{
-		Identity: linuxPrep,
+		Identity:         linuxPrep,
 		GlobalIPSettings: globalIP,
 		NicSettingMap: []types.CustomizationAdapterMapping{
 			{
@@ -816,16 +831,10 @@ func WaitForTools(ctx context.Context, vm *object.VirtualMachine) error {
 		case <-ctx.Done():
 			return fmt.Errorf("timeout waiting for VMware Tools: %w", ctx.Err())
 		case <-ticker.C:
-			var props types.ManagedObjectReference
-			err := vm.Properties(ctx, vm.Reference(), []string{"guest.toolsRunningStatus"}, &props)
-			if err != nil {
-				continue
-			}
-
 			var vmProps struct {
 				Guest types.GuestInfo `mo:"guest"`
 			}
-			err = vm.Properties(ctx, vm.Reference(), []string{"guest"}, &vmProps)
+			err := vm.Properties(ctx, vm.Reference(), []string{"guest"}, &vmProps)
 			if err != nil {
 				continue
 			}
@@ -923,9 +932,10 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 		dnsSuffixes = []string{req.Domain}
 	}
 
-	// Create customization spec
+	// Create customization spec when domain settings or networking overrides are requested
 	var customization *types.CustomizationSpec
-	if req.Domain != "" {
+	needsCustomization := req.Domain != "" || req.IPAddress != "" || len(req.DNSServers) > 0 || len(dnsSuffixes) > 0
+	if needsCustomization {
 		if req.IPAddress != "" {
 			// Static IP
 			customization = NewWindowsCustomizationStaticIP(
@@ -942,7 +952,7 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 				dnsSuffixes,
 			)
 		} else {
-			// DHCP
+			// DHCP / domain join only
 			customization = NewWindowsCustomization(
 				req.Name,
 				req.Domain,
@@ -1605,9 +1615,9 @@ func DeleteSnapshot(ctx context.Context, vm *object.VirtualMachine, snapshotName
 
 	// Create snapshot task request
 	req := types.RemoveSnapshot_Task{
-		This:            *snapshotRef,
-		RemoveChildren:  removeChildren,
-		Consolidate:     &consolidate,
+		This:           *snapshotRef,
+		RemoveChildren: removeChildren,
+		Consolidate:    &consolidate,
 	}
 
 	res, err := methods.RemoveSnapshot_Task(ctx, vm.Client(), &req)
@@ -1695,8 +1705,8 @@ func RevertToSnapshot(ctx context.Context, vm *object.VirtualMachine, snapshotNa
 
 	// Create revert snapshot task request
 	req := types.RevertToSnapshot_Task{
-		This:             *snapshotRef,
-		SuppressPowerOn:  &suppressPowerOn,
+		This:            *snapshotRef,
+		SuppressPowerOn: &suppressPowerOn,
 	}
 
 	res, err := methods.RevertToSnapshot_Task(ctx, vm.Client(), &req)
@@ -1920,12 +1930,12 @@ type VMInfo struct {
 
 // NetworkInfo contains network adapter information
 type NetworkInfo struct {
-	Label        string
-	MACAddress   string
-	Network      string
-	Connected    bool
-	AdapterType  string
-	IPAddresses  []string
+	Label       string
+	MACAddress  string
+	Network     string
+	Connected   bool
+	AdapterType string
+	IPAddresses []string
 }
 
 // GetVMInfo gets detailed information about a virtual machine.
@@ -2416,9 +2426,66 @@ func DisconnectCDROM(ctx context.Context, vm *object.VirtualMachine) error {
 //	err := vcenter.UploadFileToVM(ctx, vm, "Administrator", "password",
 //	    "/local/script.ps1", "C:\\temp\\script.ps1", true)
 func UploadFileToVM(ctx context.Context, vm *object.VirtualMachine, guestUsername string, guestPassword string, localFilePath string, remoteFilePath string, overwrite bool) error {
-	// This is a simplified implementation placeholder
-	// For production use, implement using govmomi/guest/operations/manager
-	return fmt.Errorf("guest operations not fully implemented - use govmomi/guest package directly for file operations")
+	file, err := os.Open(localFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to open local file: %w", err)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat local file: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("local path %s is a directory", localFilePath)
+	}
+
+	ops := guest.NewOperationsManager(vm.Client(), vm.Reference())
+	fileManager, err := ops.FileManager(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create guest file manager: %w", err)
+	}
+
+	auth := &types.NamePasswordAuthentication{
+		Username: guestUsername,
+		Password: guestPassword,
+	}
+
+	transferURL, err := fileManager.InitiateFileTransferToGuest(
+		ctx,
+		auth,
+		remoteFilePath,
+		&types.GuestFileAttributes{},
+		info.Size(),
+		overwrite,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to initiate file transfer: %w", err)
+	}
+
+	turl, err := fileManager.TransferURL(ctx, transferURL)
+	if err != nil {
+		return fmt.Errorf("failed to prepare transfer URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, turl.String(), file)
+	if err != nil {
+		return fmt.Errorf("failed to create upload request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := vm.Client().Client.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to upload file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	return fmt.Errorf("file upload failed (status %d): %s", resp.StatusCode, string(body))
 }
 
 // DownloadFileFromVM downloads a file from a virtual machine via VMware Tools.
@@ -2440,9 +2507,54 @@ func UploadFileToVM(ctx context.Context, vm *object.VirtualMachine, guestUsernam
 //	err := vcenter.DownloadFileFromVM(ctx, vm, "Administrator", "password",
 //	    "C:\\temp\\log.txt", "/local/log.txt")
 func DownloadFileFromVM(ctx context.Context, vm *object.VirtualMachine, guestUsername string, guestPassword string, remoteFilePath string, localFilePath string) error {
-	// This is a simplified implementation placeholder
-	// For production use, implement using govmomi/guest/operations/manager
-	return fmt.Errorf("guest operations not fully implemented - use govmomi/guest package directly for file operations")
+	ops := guest.NewOperationsManager(vm.Client(), vm.Reference())
+	fileManager, err := ops.FileManager(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create guest file manager: %w", err)
+	}
+
+	auth := &types.NamePasswordAuthentication{
+		Username: guestUsername,
+		Password: guestPassword,
+	}
+
+	info, err := fileManager.InitiateFileTransferFromGuest(ctx, auth, remoteFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to initiate file download: %w", err)
+	}
+
+	turl, err := fileManager.TransferURL(ctx, info.Url)
+	if err != nil {
+		return fmt.Errorf("failed to prepare transfer URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, turl.String(), nil)
+	if err != nil {
+		return fmt.Errorf("failed to create download request: %w", err)
+	}
+
+	resp, err := vm.Client().Client.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("file download failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	localFile, err := os.Create(localFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to create local file: %w", err)
+	}
+	defer localFile.Close()
+
+	if _, err := io.Copy(localFile, resp.Body); err != nil {
+		return fmt.Errorf("failed to write local file: %w", err)
+	}
+
+	return nil
 }
 
 // RunScriptOnVM executes a script on a virtual machine via VMware Tools.
@@ -2467,9 +2579,58 @@ func DownloadFileFromVM(ctx context.Context, vm *object.VirtualMachine, guestUse
 //	    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
 //	    []string{"-File", "C:\\temp\\script.ps1"}, "", false)
 func RunScriptOnVM(ctx context.Context, vm *object.VirtualMachine, guestUsername string, guestPassword string, scriptPath string, scriptArgs []string, workingDirectory string, waitForCompletion bool) (int64, error) {
-	// This is a simplified implementation placeholder
-	// For production use, implement using govmomi/guest/operations/manager
-	return 0, fmt.Errorf("guest operations not fully implemented - use govmomi/guest package directly for script execution")
+	ops := guest.NewOperationsManager(vm.Client(), vm.Reference())
+	processManager, err := ops.ProcessManager(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create guest process manager: %w", err)
+	}
+
+	auth := &types.NamePasswordAuthentication{
+		Username: guestUsername,
+		Password: guestPassword,
+	}
+
+	arguments := strings.Join(scriptArgs, " ")
+	spec := types.GuestProgramSpec{
+		ProgramPath:      scriptPath,
+		Arguments:        arguments,
+		WorkingDirectory: workingDirectory,
+	}
+
+	pid, err := processManager.StartProgram(ctx, auth, &spec)
+	if err != nil {
+		return 0, fmt.Errorf("failed to start guest program: %w", err)
+	}
+
+	if !waitForCompletion {
+		return pid, nil
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-waitCtx.Done():
+			return pid, fmt.Errorf("timeout waiting for script completion: %w", waitCtx.Err())
+		case <-ticker.C:
+			procs, err := processManager.ListProcesses(ctx, auth, []int64{pid})
+			if err != nil || len(procs) == 0 {
+				continue
+			}
+
+			proc := procs[0]
+			if proc.EndTime != nil {
+				if proc.ExitCode != 0 {
+					return pid, fmt.Errorf("script exited with code %d", proc.ExitCode)
+				}
+				return pid, nil
+			}
+		}
+	}
 }
 
 // UploadAndRunScript uploads a script to VM and executes it (helper function).
