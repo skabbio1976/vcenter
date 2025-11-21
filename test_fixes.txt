@@ -1,0 +1,4 @@
+2025-11-20
+- Added logging of integration test options (auto cleanup, keep-failed, timeout) via `testdata` helpers so the Go harness no longer has unused configuration fields and developers can see the active settings at the start of a run.
+- Confirmed `go test ./...` succeeds with the new integration suite scaffold (tests still gate on `test-config.json` for real environments).
+

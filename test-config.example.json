@@ -1,0 +1,22 @@
+{
+  "vcenter": {
+    "host": "vcenter.example.com",
+    "username": "administrator@vsphere.local",
+    "password": "YourPasswordHere",
+    "insecure": true,
+    "datacenter": "Datacenter1"
+  },
+  "test_resources": {
+    "template_name": "Ubuntu-20.04-Template",
+    "test_vm_prefix": "go-integration-test",
+    "datastore": "datastore1",
+    "resource_pool": "Resources",
+    "network": "VM Network",
+    "folder": ""
+  },
+  "test_options": {
+    "auto_cleanup": true,
+    "keep_failed_vms": true,
+    "test_timeout_seconds": 300
+  }
+}

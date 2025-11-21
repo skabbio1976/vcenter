@@ -29,3 +29,16 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# Test configuration (contains credentials)
+test-config.json
+credentials.json
+*.creds.json
+
+# Test binaries
+vcenter-integration-test
+vcenter-integration-test.exe
+vcenter-test-*
+
+# Test transfer directory
+vcenter-go-tests/
