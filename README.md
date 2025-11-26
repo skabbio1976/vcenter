@@ -568,6 +568,76 @@ vm, err = vcenter.CloneFromRequest(
 or a regular datastore. If it's a datastore cluster, Storage DRS will select the optimal
 datastore based on vCenter's recommendation engine.
 
+## Configuration, Credentials & Excel Automation
+
+The Go API mirrors the higher-level helpers from the Python project, which makes it easy
+to bootstrap configuration files, encrypted credential stores, Excel templates, and even
+inventory snapshots directly from Go.
+
+### Generate `vcenter_config.json`
+
+```go
+cfgPath := "vcenter_config.json"
+created, err := vcenter.EnsureConfigFile(cfgPath)
+if err != nil {
+    log.Fatal(err)
+}
+if created {
+    log.Printf("Created template config at %s", cfgPath)
+}
+```
+
+### Manage encrypted credentials
+
+```go
+store := vcenter.NewCredentialStore()
+store.AddCredential("vcenter", vcenter.Credential{
+    Server:   "vcenter.example.com",
+    Username: "administrator@vsphere.local",
+    Password: "SuperSecret!",
+    Insecure: true,
+})
+
+key, err := vcenter.GenerateEncryptionKey()
+if err != nil {
+    log.Fatal(err)
+}
+if err := store.SaveEncrypted("credentials.json.enc", vcenter.KeySourceDirect(key)); err != nil {
+    log.Fatal(err)
+}
+```
+
+### Excel workflow helpers
+
+```go
+if err := vcenter.CreateExcelTemplate("vm_requests.xlsx", nil); err != nil {
+    log.Fatal(err)
+}
+
+ok, messages, err := vcenter.ValidateExcel("vm_requests.xlsx", nil, false)
+if err != nil {
+    log.Fatal(err)
+}
+log.Printf("Template valid: %v (messages: %v)", ok, messages)
+
+configs, err := vcenter.ExcelToJSON("vm_requests.xlsx", "vm_configs")
+if err != nil {
+    log.Fatal(err)
+}
+log.Printf("Converted %d VM definitions to JSON files", len(configs))
+```
+
+### Inventory scanning
+
+```go
+inventory, err := vcenter.ScanVCenter(ctx, client.Client, vcenter.InventoryOptions{})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Datacenters:", inventory.Datacenters)
+fmt.Println("Clusters in first DC:", inventory.ComputeClusters[inventory.Datacenters[0]])
+```
+
 ## Error Handling
 
 The package uses custom error types for better error handling:

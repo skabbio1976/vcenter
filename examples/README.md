@@ -27,6 +27,7 @@ The examples are organized in numerical order from simple to advanced usage:
 
 - **08-disk-operations** - Add, extend, and remove disks
 - **09-network-operations** - Add and modify network adapters
+- **11-config-and-excel** - Generate config/credential templates and Excel workflows
 
 ## How to Run the Examples
 
@@ -185,6 +186,21 @@ Advanced example showing ServerRequest struct for:
 cd examples/10-server-request
 go run main.go
 ```
+
+### 11-config-and-excel
+
+Utility example that ties together the configuration, credential, and Excel helpers:
+
+- Create a vcenter_config.json template with sensible defaults
+- Generate encrypted credential stores using CredentialStore
+- Produce the Excel template and validate it before sending to operators
+
+```bash
+cd examples/11-config-and-excel
+go run main.go
+```
+
+The example writes everything to your temporary directory so that you can inspect the generated files without touching the repository.
 
 ## Best Practices
 
