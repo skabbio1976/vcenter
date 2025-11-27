@@ -28,19 +28,23 @@ func main() {
 	defer client.Logout(ctx)
 
 	// Create Windows customization spec with static IP
-	customization := vcenter.NewWindowsCustomizationStaticIP(
-		"DBServer01",                     // Computer name
-		"example.com",                    // AD Domain
-		"administrator@example.com",      // Domain admin user
-		"DomainPassword123!",             // Domain password
-		"LocalAdminPass123!",             // Local admin password
-		85,                               // Timezone (W. Europe)
-		"192.168.1.100",                  // Static IP address
-		"255.255.255.0",                  // Subnet mask
-		"192.168.1.1",                    // Default gateway
-		[]string{"192.168.1.1", "192.168.1.2"}, // DNS servers
-		[]string{"example.com"},          // DNS suffixes
-	)
+	customization := vcenter.NewWindowsCustomization(vcenter.WindowsCustomizationConfig{
+		ComputerName:   "DBServer01",
+		AdminPassword:  "LocalAdminPass123!",
+		Timezone:       85, // W. Europe Standard Time
+		Domain:         "example.com",
+		DomainUser:     "administrator@example.com",
+		DomainPassword: "DomainPassword123!",
+		// Static IP configuration using Adapters
+		Adapters: []vcenter.NetworkAdapter{{
+			IPAddress:  "192.168.1.100",
+			SubnetMask: "255.255.255.0",
+			Gateway:    "192.168.1.1",
+			DNSServers: []string{"192.168.1.1", "192.168.1.2"},
+		}},
+		GlobalDNS:   []string{"192.168.1.1", "192.168.1.2"},
+		DNSSuffixes: []string{"example.com"},
+	})
 
 	log.Println("Cloning Windows VM with static IP...")
 
@@ -60,21 +64,24 @@ func main() {
 		log.Fatalf("Failed to clone VM: %v", err)
 	}
 
-	log.Printf("✓ VM cloned: %s", vm.Name())
+	log.Printf("VM cloned: %s", vm.Name())
 
-	// Wait for VMware Tools and IP
-	log.Println("Waiting for VMware Tools and IP configuration...")
-	err = vcenter.WaitForTools(ctx, vm)
+	// Wait for customization to complete
+	log.Println("Waiting for customization to complete...")
+	err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute)
 	if err != nil {
 		log.Printf("Warning: %v", err)
+	} else {
+		log.Println("Customization completed!")
 	}
 
+	// Verify IP address
 	ip, err := vcenter.WaitForIP(ctx, vm, 10*time.Minute)
 	if err != nil {
 		log.Printf("Warning: %v", err)
 	} else {
-		log.Printf("✓ VM IP: %s (should be 192.168.1.100)", ip)
+		log.Printf("VM IP: %s (expected: 192.168.1.100)", ip)
 	}
 
-	log.Println("✓ Done!")
+	log.Println("Done!")
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -133,139 +134,9 @@ func getStoragePlacementResult(
 	return &vmRef, nil
 }
 
-// CloneVM clones a virtual machine from a template.
-//
-// The function creates a new VM based on the specified template and places it
-// in the specified datacenter, datastore, and resource pool.
-//
-// Parameters:
-//   - ctx: Context for timeout and cancellation
-//   - client: govmomi.Client for vCenter connection
-//   - templateName: The name of the template to clone from
-//   - vmName: The name of the new VM
-//   - datacenter: The name of the datacenter
-//   - datastore: The name of the datastore or datastore cluster where the VM should be created
-//   - resourcePool: The name of the resource pool (e.g. "Resources")
-//   - folder: The name of the VM folder (empty string for default VM folder)
-//
-// Returns the newly created VM or an error if cloning fails.
-//
-// Example:
-//
-//	vm, err := vcenter.CloneVM(ctx, client, "Win2022-Template", "WebServer01",
-//	    "DC1", "datastore1", "Resources", "WebServers")
-func CloneVM(
-	ctx context.Context,
-	client *govmomi.Client,
-	templateName string,
-	vmName string,
-	datacenter string,
-	datastore string,
-	resourcePool string,
-	folder string,
-) (*object.VirtualMachine, error) {
-
-	finder := find.NewFinder(client.Client, true)
-
-	dc, err := finder.Datacenter(ctx, datacenter)
-	if err != nil {
-		return nil, fmt.Errorf("datacenter not found: %w", err)
-	}
-	finder.SetDatacenter(dc)
-
-	template, err := finder.VirtualMachine(ctx, templateName)
-	if err != nil {
-		return nil, fmt.Errorf("template not found: %w", err)
-	}
-
-	pool, err := finder.ResourcePool(ctx, resourcePool)
-	if err != nil {
-		return nil, fmt.Errorf("resource pool not found: %w", err)
-	}
-
-	var vmFolder *object.Folder
-	if folder != "" {
-		vmFolder, err = finder.Folder(ctx, folder)
-		if err != nil {
-			return nil, fmt.Errorf("folder not found: %w", err)
-		}
-	} else {
-		folders, err := dc.Folders(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get folders: %w", err)
-		}
-		vmFolder = folders.VmFolder
-	}
-
-	// Resolve datastore or datastore cluster
-	isCluster, datastoreRef, clusterRef, err := resolveDatastoreOrCluster(ctx, finder, datastore)
-	if err != nil {
-		return nil, err
-	}
-
-	// If it's a datastore cluster, use Storage DRS placement
-	if isCluster {
-		vmRef, err := getStoragePlacementResult(ctx, client, template, vmFolder, vmName, pool, *clusterRef, false, nil)
-		if err != nil {
-			return nil, err
-		}
-		vm := object.NewVirtualMachine(client.Client, *vmRef)
-		return vm, nil
-	}
-
-	// Regular datastore - use normal clone
-	relocateSpec := types.VirtualMachineRelocateSpec{
-		Datastore:    datastoreRef,
-		Pool:         types.NewReference(pool.Reference()),
-		DiskMoveType: string(types.VirtualMachineRelocateDiskMoveOptionsMoveAllDiskBackingsAndAllowSharing),
-	}
-
-	cloneSpec := types.VirtualMachineCloneSpec{
-		Location: relocateSpec,
-		PowerOn:  false,
-		Template: false,
-	}
-
-	task, err := template.Clone(ctx, vmFolder, vmName, cloneSpec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start clone: %w", err)
-	}
-
-	info, err := task.WaitForResult(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("clone failed: %w", err)
-	}
-
-	vm := object.NewVirtualMachine(client.Client, info.Result.(types.ManagedObjectReference))
-	return vm, nil
-}
-
-// CloneVMWithCustomization clones a virtual machine with Windows customization.
-//
-// The function clones a VM from a template and applies Windows customizations
-// such as computer name, domain join, IP configuration, and timezone.
-// The VM is started automatically after cloning so that customization can run.
-//
-// Parameters:
-//   - ctx: Context for timeout and cancellation
-//   - client: govmomi.Client for vCenter connection
-//   - templateName: The name of the template to clone from
-//   - vmName: The name of the new VM
-//   - datacenter: The name of the datacenter
-//   - datastore: The name of the datastore or datastore cluster where the VM should be created
-//   - resourcePool: The name of the resource pool
-//   - folder: The name of the VM folder (empty string for default)
-//   - customization: CustomizationSpec with all Windows settings
-//
-// Returns the newly created VM or an error.
-//
-// Example:
-//
-//	customization := vcenter.NewWindowsCustomization(...)
-//	vm, err := vcenter.CloneVMWithCustomization(ctx, client,
-//	    "Win2022-Template", "WebServer01", "DC1", "datastore1",
-//	    "Resources", "", customization)
-func CloneVMWithCustomization(
+// cloneVMInternal is the internal clone function that supports all options.
+// This is used by the public functions CloneVM and CloneFromRequest.
+func cloneVMInternal(
 	ctx context.Context,
 	client *govmomi.Client,
 	templateName string,
@@ -275,6 +146,7 @@ func CloneVMWithCustomization(
 	resourcePool string,
 	folder string,
 	customization *types.CustomizationSpec,
+	powerOn bool,
 ) (*object.VirtualMachine, error) {
 
 	finder := find.NewFinder(client.Client, true)
@@ -317,7 +189,7 @@ func CloneVMWithCustomization(
 
 	// If it's a datastore cluster, use Storage DRS placement
 	if isCluster {
-		vmRef, err := getStoragePlacementResult(ctx, client, template, vmFolder, vmName, pool, *clusterRef, true, customization)
+		vmRef, err := getStoragePlacementResult(ctx, client, template, vmFolder, vmName, pool, *clusterRef, powerOn, customization)
 		if err != nil {
 			return nil, err
 		}
@@ -334,7 +206,7 @@ func CloneVMWithCustomization(
 
 	cloneSpec := types.VirtualMachineCloneSpec{
 		Location:      relocateSpec,
-		PowerOn:       true, // Must be true for customization
+		PowerOn:       powerOn,
 		Template:      false,
 		Customization: customization,
 	}
@@ -353,294 +225,377 @@ func CloneVMWithCustomization(
 	return vm, nil
 }
 
-// NewWindowsCustomization creates a Windows customization spec for domain join with DHCP.
+// CloneVM clones a virtual machine from a template.
 //
-// The function generates a CustomizationSpec that can be used when cloning VMs
-// to automatically:
-//   - Set computer name
-//   - Join Active Directory domain
-//   - Configure local administrator password
-//   - Set timezone
-//   - Configure DNS servers (IP retrieved from DHCP)
+// The function creates a new VM based on the specified template and places it
+// in the specified datacenter, datastore, and resource pool.
+// The VM is created powered off by default.
 //
 // Parameters:
-//   - computerName: The computer name in Windows
-//   - domain: AD domain to join (e.g. "example.com")
-//   - domainUser: Domain admin user (e.g. "administrator@example.com")
-//   - domainPassword: Password for domain admin
-//   - adminPassword: Local administrator password
-//   - timezone: Windows timezone ID (85 for W. Europe, 110 for Pacific, etc)
-//   - dnsServers: List of DNS server IP addresses
-//   - dnsSuffixes: List of DNS search suffixes
+//   - ctx: Context for timeout and cancellation
+//   - client: govmomi.Client for vCenter connection
+//   - templateName: The name of the template to clone from
+//   - vmName: The name of the new VM
+//   - datacenter: The name of the datacenter
+//   - datastore: The name of the datastore or datastore cluster where the VM should be created
+//   - resourcePool: The name of the resource pool (e.g. "Resources")
+//   - folder: The name of the VM folder (empty string for default VM folder)
 //
-// Returns a CustomizationSpec ready to be used with CloneVMWithCustomization.
+// Returns the newly created VM (powered off) or an error if cloning fails.
 //
 // Example:
 //
-//	spec := vcenter.NewWindowsCustomization("WebServer01", "example.com",
-//	    "admin@example.com", "domainpass", "adminpass", 85,
-//	    []string{"192.168.1.1", "192.168.1.2"},
-//	    []string{"example.com"})
-func NewWindowsCustomization(
-	computerName string,
-	domain string,
-	domainUser string,
-	domainPassword string,
-	adminPassword string,
-	timezone int,
-	dnsServers []string,
-	dnsSuffixes []string,
-) *types.CustomizationSpec {
+//	vm, err := vcenter.CloneVM(ctx, client, "Win2022-Template", "WebServer01",
+//	    "DC1", "datastore1", "Resources", "WebServers")
+func CloneVM(
+	ctx context.Context,
+	client *govmomi.Client,
+	templateName string,
+	vmName string,
+	datacenter string,
+	datastore string,
+	resourcePool string,
+	folder string,
+) (*object.VirtualMachine, error) {
+	return cloneVMInternal(ctx, client, templateName, vmName, datacenter, datastore, resourcePool, folder, nil, false)
+}
 
+// CloneVMWithCustomization clones a virtual machine with Windows/Linux customization.
+//
+// The function clones a VM from a template and applies customizations
+// such as computer name, domain join, IP configuration, and timezone.
+// The VM is started automatically after cloning so that customization can run.
+//
+// NOTE: For proper customization with additional disks or resource changes,
+// use CloneFromRequest instead which implements the correct operation order.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - client: govmomi.Client for vCenter connection
+//   - templateName: The name of the template to clone from
+//   - vmName: The name of the new VM
+//   - datacenter: The name of the datacenter
+//   - datastore: The name of the datastore or datastore cluster where the VM should be created
+//   - resourcePool: The name of the resource pool
+//   - folder: The name of the VM folder (empty string for default)
+//   - customization: CustomizationSpec with all Windows/Linux settings
+//
+// Returns the newly created VM or an error.
+//
+// Example:
+//
+//	customization := vcenter.NewWindowsCustomization(vcenter.WindowsCustomizationConfig{...})
+//	vm, err := vcenter.CloneVMWithCustomization(ctx, client,
+//	    "Win2022-Template", "WebServer01", "DC1", "datastore1",
+//	    "Resources", "", customization)
+func CloneVMWithCustomization(
+	ctx context.Context,
+	client *govmomi.Client,
+	templateName string,
+	vmName string,
+	datacenter string,
+	datastore string,
+	resourcePool string,
+	folder string,
+	customization *types.CustomizationSpec,
+) (*object.VirtualMachine, error) {
+	return cloneVMInternal(ctx, client, templateName, vmName, datacenter, datastore, resourcePool, folder, customization, true)
+}
+
+// ============================================================================
+// Customization Types and Functions
+// ============================================================================
+
+// NetworkAdapter describes the configuration for a network adapter during customization.
+// Used in multi-NIC scenarios where each adapter can have different IP settings.
+type NetworkAdapter struct {
+	Network    string   `json:"network"`               // Port group/network name
+	IPAddress  string   `json:"ip_address,omitempty"`  // Empty = DHCP
+	SubnetMask string   `json:"subnet_mask,omitempty"` // Required if IPAddress is set
+	Gateway    string   `json:"gateway,omitempty"`     // Required if IPAddress is set
+	DNSServers []string `json:"dns_servers,omitempty"` // Per-adapter DNS servers (optional)
+}
+
+// WindowsCustomizationConfig contains all settings for Windows VM customization.
+// This unified config supports all scenarios: domain join, workgroup, DHCP, static IP,
+// single NIC, and multi-NIC configurations.
+type WindowsCustomizationConfig struct {
+	ComputerName  string // Required: Windows computer name (max 15 chars)
+	AdminPassword string // Required: Local administrator password
+
+	// Timezone - Windows timezone ID (e.g., 85 for W. Europe, 110 for Pacific)
+	Timezone int
+
+	// Domain join settings (optional - if Domain is empty, joins WORKGROUP)
+	Domain          string // AD domain to join (e.g., "example.com")
+	DomainUser      string // Domain admin user (e.g., "admin@example.com")
+	DomainPassword  string // Password for domain admin
+	MachineObjectOU string // OU for computer object (e.g., "OU=Servers,DC=example,DC=com")
+
+	// Network settings
+	Adapters    []NetworkAdapter // Network adapters (empty = one DHCP adapter)
+	GlobalDNS   []string         // Global DNS servers
+	DNSSuffixes []string         // DNS search suffixes
+
+	// Autologon settings
+	AutologonCount int // Number of auto-logons (0 = disabled)
+}
+
+// LinuxCustomizationConfig contains all settings for Linux VM customization.
+// Supports DHCP, static IP, single NIC, and multi-NIC configurations.
+type LinuxCustomizationConfig struct {
+	Hostname string // Required: Linux hostname
+	Domain   string // Domain name (optional)
+
+	// Network settings
+	Adapters    []NetworkAdapter // Network adapters (empty = one DHCP adapter)
+	GlobalDNS   []string         // Global DNS servers
+	DNSSuffixes []string         // DNS search suffixes
+}
+
+// NewWindowsCustomization creates a Windows customization spec from a config struct.
+//
+// This function replaces the older separate functions and supports all scenarios:
+//   - Domain join with DHCP
+//   - Domain join with static IP
+//   - Workgroup (standalone) with DHCP
+//   - Workgroup (standalone) with static IP
+//   - Single or multiple network adapters
+//   - MachineObjectOU for specific OU placement
+//   - Autologon for post-install scripts
+//
+// Example - Domain join with DHCP:
+//
+//	spec := vcenter.NewWindowsCustomization(vcenter.WindowsCustomizationConfig{
+//	    ComputerName:  "WebServer01",
+//	    AdminPassword: "SecurePass123!",
+//	    Timezone:      85,
+//	    Domain:        "example.com",
+//	    DomainUser:    "admin@example.com",
+//	    DomainPassword: "DomainPass!",
+//	    GlobalDNS:     []string{"192.168.1.1", "192.168.1.2"},
+//	    DNSSuffixes:   []string{"example.com"},
+//	})
+//
+// Example - Standalone with static IP:
+//
+//	spec := vcenter.NewWindowsCustomization(vcenter.WindowsCustomizationConfig{
+//	    ComputerName:  "TestServer",
+//	    AdminPassword: "SecurePass123!",
+//	    Timezone:      85,
+//	    Adapters: []vcenter.NetworkAdapter{{
+//	        IPAddress:  "192.168.1.100",
+//	        SubnetMask: "255.255.255.0",
+//	        Gateway:    "192.168.1.1",
+//	        DNSServers: []string{"192.168.1.1"},
+//	    }},
+//	})
+//
+// Example - Multi-NIC configuration:
+//
+//	spec := vcenter.NewWindowsCustomization(vcenter.WindowsCustomizationConfig{
+//	    ComputerName:  "WebServer01",
+//	    AdminPassword: "SecurePass123!",
+//	    Timezone:      85,
+//	    Domain:        "example.com",
+//	    DomainUser:    "admin@example.com",
+//	    DomainPassword: "DomainPass!",
+//	    Adapters: []vcenter.NetworkAdapter{
+//	        {Network: "Production", IPAddress: "10.1.1.10", SubnetMask: "255.255.255.0", Gateway: "10.1.1.1"},
+//	        {Network: "Management", IPAddress: "10.2.1.10", SubnetMask: "255.255.255.0", Gateway: "10.2.1.1"},
+//	    },
+//	    GlobalDNS:   []string{"10.1.1.1"},
+//	    DNSSuffixes: []string{"example.com"},
+//	})
+func NewWindowsCustomization(cfg WindowsCustomizationConfig) *types.CustomizationSpec {
+	// Build identification (domain join or workgroup)
 	identification := types.CustomizationIdentification{}
-	if domain != "" {
-		identification.JoinDomain = domain
-		identification.DomainAdmin = domainUser
+	if cfg.Domain != "" {
+		identification.JoinDomain = cfg.Domain
+		identification.DomainAdmin = cfg.DomainUser
 		identification.DomainAdminPassword = &types.CustomizationPassword{
-			Value:     domainPassword,
+			Value:     cfg.DomainPassword,
 			PlainText: true,
+		}
+		// Set the OU path for the computer object if specified
+		if cfg.MachineObjectOU != "" {
+			identification.DomainOU = cfg.MachineObjectOU
 		}
 	} else {
 		identification.JoinWorkgroup = "WORKGROUP"
 	}
 
-	return &types.CustomizationSpec{
-		Identity: &types.CustomizationSysprep{
-			GuiUnattended: types.CustomizationGuiUnattended{
-				Password: &types.CustomizationPassword{
-					Value:     adminPassword,
-					PlainText: true,
-				},
-				TimeZone:       int32(timezone),
-				AutoLogon:      false,
-				AutoLogonCount: 1,
-			},
-			UserData: types.CustomizationUserData{
-				FullName: "Administrator",
-				OrgName:  "Organization",
-				ComputerName: &types.CustomizationFixedName{
-					Name: computerName,
-				},
-			},
-			Identification: identification,
-		},
-		GlobalIPSettings: types.CustomizationGlobalIPSettings{
-			DnsServerList: dnsServers,
-			DnsSuffixList: dnsSuffixes,
-		},
-		NicSettingMap: []types.CustomizationAdapterMapping{
-			{
-				Adapter: types.CustomizationIPSettings{
-					Ip: &types.CustomizationDhcpIpGenerator{},
-				},
-			},
-		},
+	// Handle autologon
+	autoLogon := cfg.AutologonCount > 0
+	autoLogonCount := int32(1)
+	if cfg.AutologonCount > 0 {
+		autoLogonCount = int32(cfg.AutologonCount)
 	}
-}
 
-// NewWindowsCustomizationStaticIP creates a Windows customization spec with a static IP address.
-//
-// The function is identical to NewWindowsCustomization but configures a static
-// IP address instead of DHCP.
-//
-// Parameters:
-//   - computerName: The computer name in Windows
-//   - domain: AD domain to join
-//   - domainUser: Domain admin user
-//   - domainPassword: Password for domain admin
-//   - adminPassword: Local administrator password
-//   - timezone: Windows timezone ID
-//   - ipAddress: Static IP address (e.g. "192.168.1.100")
-//   - subnetMask: Subnet mask (e.g. "255.255.255.0")
-//   - gateway: Default gateway IP address
-//   - dnsServers: List of DNS server IP addresses
-//   - dnsSuffixes: List of DNS search suffixes
-//
-// Returns a CustomizationSpec with static IP configuration.
-//
-// Example:
-//
-//	spec := vcenter.NewWindowsCustomizationStaticIP("WebServer01", "example.com",
-//	    "admin@example.com", "domainpass", "adminpass", 85,
-//	    "192.168.1.100", "255.255.255.0", "192.168.1.1",
-//	    []string{"192.168.1.1"}, []string{"example.com"})
-func NewWindowsCustomizationStaticIP(
-	computerName string,
-	domain string,
-	domainUser string,
-	domainPassword string,
-	adminPassword string,
-	timezone int,
-	ipAddress string,
-	subnetMask string,
-	gateway string,
-	dnsServers []string,
-	dnsSuffixes []string,
-) *types.CustomizationSpec {
+	// Build sysprep identity
+	sysprep := &types.CustomizationSysprep{
+		GuiUnattended: types.CustomizationGuiUnattended{
+			Password: &types.CustomizationPassword{
+				Value:     cfg.AdminPassword,
+				PlainText: true,
+			},
+			TimeZone:       int32(cfg.Timezone),
+			AutoLogon:      autoLogon,
+			AutoLogonCount: autoLogonCount,
+		},
+		UserData: types.CustomizationUserData{
+			FullName: "Administrator",
+			OrgName:  "Organization",
+			ComputerName: &types.CustomizationFixedName{
+				Name: cfg.ComputerName,
+			},
+		},
+		Identification: identification,
+	}
 
-	identification := types.CustomizationIdentification{}
-	if domain != "" {
-		identification.JoinDomain = domain
-		identification.DomainAdmin = domainUser
-		identification.DomainAdminPassword = &types.CustomizationPassword{
-			Value:     domainPassword,
-			PlainText: true,
-		}
+	// Build network adapter mappings
+	var nicMappings []types.CustomizationAdapterMapping
+
+	if len(cfg.Adapters) == 0 {
+		// Default: single adapter with DHCP
+		nicMappings = []types.CustomizationAdapterMapping{{
+			Adapter: types.CustomizationIPSettings{
+				Ip: &types.CustomizationDhcpIpGenerator{},
+			},
+		}}
 	} else {
-		identification.JoinWorkgroup = "WORKGROUP"
+		// Build mapping for each adapter
+		for _, adapter := range cfg.Adapters {
+			mapping := types.CustomizationAdapterMapping{
+				Adapter: types.CustomizationIPSettings{},
+			}
+
+			if adapter.IPAddress != "" {
+				// Static IP configuration
+				mapping.Adapter.Ip = &types.CustomizationFixedIp{
+					IpAddress: adapter.IPAddress,
+				}
+				mapping.Adapter.SubnetMask = adapter.SubnetMask
+				if adapter.Gateway != "" {
+					mapping.Adapter.Gateway = []string{adapter.Gateway}
+				}
+				if len(adapter.DNSServers) > 0 {
+					mapping.Adapter.DnsServerList = adapter.DNSServers
+				}
+			} else {
+				// DHCP configuration
+				mapping.Adapter.Ip = &types.CustomizationDhcpIpGenerator{}
+			}
+
+			nicMappings = append(nicMappings, mapping)
+		}
 	}
 
 	return &types.CustomizationSpec{
-		Identity: &types.CustomizationSysprep{
-			GuiUnattended: types.CustomizationGuiUnattended{
-				Password: &types.CustomizationPassword{
-					Value:     adminPassword,
-					PlainText: true,
-				},
-				TimeZone:       int32(timezone),
-				AutoLogon:      false,
-				AutoLogonCount: 1,
-			},
-			UserData: types.CustomizationUserData{
-				FullName: "Administrator",
-				OrgName:  "Organization",
-				ComputerName: &types.CustomizationFixedName{
-					Name: computerName,
-				},
-			},
-			Identification: identification,
-		},
+		Identity: sysprep,
 		GlobalIPSettings: types.CustomizationGlobalIPSettings{
-			DnsServerList: dnsServers,
-			DnsSuffixList: dnsSuffixes,
+			DnsServerList: cfg.GlobalDNS,
+			DnsSuffixList: cfg.DNSSuffixes,
 		},
-		NicSettingMap: []types.CustomizationAdapterMapping{
-			{
-				Adapter: types.CustomizationIPSettings{
-					Ip: &types.CustomizationFixedIp{
-						IpAddress: ipAddress,
-					},
-					SubnetMask:    subnetMask,
-					Gateway:       []string{gateway},
-					DnsServerList: dnsServers,
-				},
-			},
-		},
+		NicSettingMap: nicMappings,
 	}
 }
 
-// NewLinuxCustomization creates a Linux customization spec with DHCP.
+// NewLinuxCustomization creates a Linux customization spec from a config struct.
 //
-// The function generates a CustomizationSpec for Linux VMs that can be used
-// when cloning to automatically:
-//   - Set hostname
-//   - Configure domain
-//   - Configure DNS servers (IP retrieved from DHCP)
+// This function supports all Linux customization scenarios:
+//   - DHCP configuration
+//   - Static IP configuration
+//   - Single or multiple network adapters
 //
-// Parameters:
-//   - hostname: The hostname for the Linux system
-//   - domain: Domain name (optional, can be empty string)
-//   - dnsServers: List of DNS server IP addresses (can be nil or empty)
-//   - dnsSuffixes: List of DNS search suffixes (can be nil or empty)
+// Example - Simple DHCP:
 //
-// Returns a CustomizationSpec ready to be used with CloneVMWithCustomization.
+//	spec := vcenter.NewLinuxCustomization(vcenter.LinuxCustomizationConfig{
+//	    Hostname: "webserver01",
+//	    Domain:   "example.com",
+//	})
 //
-// Example:
+// Example - Static IP:
 //
-//	// Basic Linux customization with DHCP
-//	spec := vcenter.NewLinuxCustomization("webserver01", "example.com",
-//	    []string{"192.168.1.1", "192.168.1.2"}, []string{"example.com"})
+//	spec := vcenter.NewLinuxCustomization(vcenter.LinuxCustomizationConfig{
+//	    Hostname: "webserver01",
+//	    Domain:   "example.com",
+//	    Adapters: []vcenter.NetworkAdapter{{
+//	        IPAddress:  "192.168.1.100",
+//	        SubnetMask: "255.255.255.0",
+//	        Gateway:    "192.168.1.1",
+//	    }},
+//	    GlobalDNS:   []string{"192.168.1.1"},
+//	    DNSSuffixes: []string{"example.com"},
+//	})
 //
-//	// Minimal customization (just hostname)
-//	spec := vcenter.NewLinuxCustomization("webserver01", "", nil, nil)
-func NewLinuxCustomization(hostname string, domain string, dnsServers []string, dnsSuffixes []string) *types.CustomizationSpec {
+// Example - Multi-NIC:
+//
+//	spec := vcenter.NewLinuxCustomization(vcenter.LinuxCustomizationConfig{
+//	    Hostname: "appserver01",
+//	    Domain:   "example.com",
+//	    Adapters: []vcenter.NetworkAdapter{
+//	        {IPAddress: "10.1.1.20", SubnetMask: "255.255.255.0", Gateway: "10.1.1.1"},
+//	        {IPAddress: "10.2.1.20", SubnetMask: "255.255.255.0", Gateway: "10.2.1.1"},
+//	    },
+//	    GlobalDNS: []string{"10.1.1.1"},
+//	})
+func NewLinuxCustomization(cfg LinuxCustomizationConfig) *types.CustomizationSpec {
+	// Build Linux identity
 	linuxPrep := &types.CustomizationLinuxPrep{
 		HostName: &types.CustomizationFixedName{
-			Name: hostname,
+			Name: cfg.Hostname,
 		},
 	}
-
-	if domain != "" {
-		linuxPrep.Domain = domain
+	if cfg.Domain != "" {
+		linuxPrep.Domain = cfg.Domain
 	}
 
-	globalIP := types.CustomizationGlobalIPSettings{}
-	if len(dnsServers) > 0 {
-		globalIP.DnsServerList = dnsServers
-	}
-	if len(dnsSuffixes) > 0 {
-		globalIP.DnsSuffixList = dnsSuffixes
+	// Build network adapter mappings
+	var nicMappings []types.CustomizationAdapterMapping
+
+	if len(cfg.Adapters) == 0 {
+		// Default: single adapter with DHCP
+		nicMappings = []types.CustomizationAdapterMapping{{
+			Adapter: types.CustomizationIPSettings{
+				Ip: &types.CustomizationDhcpIpGenerator{},
+			},
+		}}
+	} else {
+		// Build mapping for each adapter
+		for _, adapter := range cfg.Adapters {
+			mapping := types.CustomizationAdapterMapping{
+				Adapter: types.CustomizationIPSettings{},
+			}
+
+			if adapter.IPAddress != "" {
+				// Static IP configuration
+				mapping.Adapter.Ip = &types.CustomizationFixedIp{
+					IpAddress: adapter.IPAddress,
+				}
+				mapping.Adapter.SubnetMask = adapter.SubnetMask
+				if adapter.Gateway != "" {
+					mapping.Adapter.Gateway = []string{adapter.Gateway}
+				}
+			} else {
+				// DHCP configuration
+				mapping.Adapter.Ip = &types.CustomizationDhcpIpGenerator{}
+			}
+
+			nicMappings = append(nicMappings, mapping)
+		}
 	}
 
 	return &types.CustomizationSpec{
-		Identity:         linuxPrep,
-		GlobalIPSettings: globalIP,
-		NicSettingMap: []types.CustomizationAdapterMapping{
-			{
-				Adapter: types.CustomizationIPSettings{
-					Ip: &types.CustomizationDhcpIpGenerator{},
-				},
-			},
+		Identity: linuxPrep,
+		GlobalIPSettings: types.CustomizationGlobalIPSettings{
+			DnsServerList: cfg.GlobalDNS,
+			DnsSuffixList: cfg.DNSSuffixes,
 		},
+		NicSettingMap: nicMappings,
 	}
 }
 
-// NewLinuxCustomizationStaticIP creates a Linux customization spec with static IP.
-//
-// The function is similar to NewLinuxCustomization but configures a static
-// IP address instead of DHCP.
-//
-// Parameters:
-//   - hostname: The hostname for the Linux system
-//   - ipAddress: Static IP address (e.g. "192.168.1.100")
-//   - netmask: Subnet mask (e.g. "255.255.255.0")
-//   - gateway: Default gateway IP address
-//   - dnsServers: List of DNS server IP addresses
-//   - domain: Domain name (optional, can be empty string)
-//   - dnsSuffixes: List of DNS search suffixes (can be nil or empty)
-//
-// Returns a CustomizationSpec with static IP configuration.
-//
-// Example:
-//
-//	spec := vcenter.NewLinuxCustomizationStaticIP("webserver01",
-//	    "192.168.1.100", "255.255.255.0", "192.168.1.1",
-//	    []string{"192.168.1.1", "192.168.1.2"}, "example.com",
-//	    []string{"example.com"})
-func NewLinuxCustomizationStaticIP(hostname string, ipAddress string, netmask string, gateway string, dnsServers []string, domain string, dnsSuffixes []string) *types.CustomizationSpec {
-	linuxPrep := &types.CustomizationLinuxPrep{
-		HostName: &types.CustomizationFixedName{
-			Name: hostname,
-		},
-	}
-
-	if domain != "" {
-		linuxPrep.Domain = domain
-	}
-
-	globalIP := types.CustomizationGlobalIPSettings{
-		DnsServerList: dnsServers,
-	}
-	if len(dnsSuffixes) > 0 {
-		globalIP.DnsSuffixList = dnsSuffixes
-	}
-
-	return &types.CustomizationSpec{
-		Identity:         linuxPrep,
-		GlobalIPSettings: globalIP,
-		NicSettingMap: []types.CustomizationAdapterMapping{
-			{
-				Adapter: types.CustomizationIPSettings{
-					Ip: &types.CustomizationFixedIp{
-						IpAddress: ipAddress,
-					},
-					SubnetMask: netmask,
-					Gateway:    []string{gateway},
-				},
-			},
-		},
-	}
-}
 
 // SetVMResources changes CPU and memory on a virtual machine.
 //
@@ -846,23 +801,136 @@ func WaitForTools(ctx context.Context, vm *object.VirtualMachine) error {
 	}
 }
 
+// WaitForCustomization waits for VM guest customization (Windows Sysprep) to complete.
+//
+// The function detects customization completion by checking three conditions:
+//  1. Hostname matches: The VM's hostname starts with the VM name
+//     (before sysprep: WIN-XXXXXXX, after: the name we configured)
+//  2. Valid IP address: Not a link-local address (169.254.x.x)
+//  3. VMware Tools running: Guest tools are operational
+//
+// This approach is more reliable than event-based monitoring because:
+//   - Events can be missed or delayed in vCenter
+//   - Hostname change is a deterministic marker that sysprep completed
+//   - Works for both domain-joined and standalone VMs
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object to monitor
+//   - timeout: Max time to wait (recommended: 10-15 minutes)
+//
+// Returns nil when customization completes, otherwise a timeout error.
+//
+// Example:
+//
+//	// After cloning with customization
+//	err := vcenter.WaitForCustomization(ctx, vm, 10*time.Minute)
+//	if err != nil {
+//	    log.Printf("Customization failed: %v", err)
+//	}
+//	fmt.Println("VM is ready - customization complete!")
+func WaitForCustomization(ctx context.Context, vm *object.VirtualMachine, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(5 * time.Second) // Poll every 5 seconds
+	defer ticker.Stop()
+
+	startTime := time.Now()
+	var lastLogTime time.Time
+	vmName := vm.Name()
+
+	log.Printf("Waiting for customization to complete on %s...", vmName)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("customization timeout after %v on %s: %w", timeout, vmName, ctx.Err())
+		case <-ticker.C:
+			var props struct {
+				Guest types.GuestInfo `mo:"guest"`
+			}
+			err := vm.Properties(ctx, vm.Reference(), []string{"guest"}, &props)
+			if err != nil {
+				continue
+			}
+
+			hostname := props.Guest.HostName
+			ip := props.Guest.IpAddress
+			toolsStatus := props.Guest.ToolsRunningStatus
+
+			// Check all three conditions:
+			// 1. Hostname matches VM name (handles both "srv001" and "srv001.domain.local")
+			hostnameMatches := hostname != "" &&
+				strings.HasPrefix(strings.ToLower(hostname), strings.ToLower(vmName))
+
+			// 2. Valid IP (not link-local 169.254.x.x which indicates DHCP failure)
+			hasValidIP := ip != "" && !strings.HasPrefix(ip, "169.254.")
+
+			// 3. VMware Tools is running
+			toolsRunning := toolsStatus == string(types.VirtualMachineToolsRunningStatusGuestToolsRunning)
+
+			if hostnameMatches && hasValidIP && toolsRunning {
+				log.Printf("Customization complete on %s (hostname=%s, ip=%s)", vmName, hostname, ip)
+				return nil
+			}
+
+			// Log status every 30 seconds
+			if time.Since(lastLogTime) >= 30*time.Second {
+				elapsed := int(time.Since(startTime).Seconds())
+				hostnameDisplay := hostname
+				if hostnameDisplay == "" {
+					hostnameDisplay = "(not set)"
+				}
+				ipDisplay := ip
+				if ipDisplay == "" {
+					ipDisplay = "(no IP)"
+				}
+				log.Printf("  Waiting for %s (%ds): hostname=%s, ip=%s, tools=%s",
+					vmName, elapsed, hostnameDisplay, ipDisplay, toolsStatus)
+				lastLogTime = time.Now()
+			}
+		}
+	}
+}
+
 // ============================================================================
 // JSON/Config Parsing
 // ============================================================================
 
-// ServerRequest represents a server order with all necessary configuration
+// ServerRequest represents a server order with all necessary configuration.
+// Supports multi-NIC, multiple disks, MachineObjectOU, and autologon.
 type ServerRequest struct {
-	Name        string   `json:"name"`
-	Template    string   `json:"template"`
-	CPUs        int32    `json:"cpus"`
-	MemoryGB    int      `json:"memory_gb"`
-	DiskGB      int      `json:"disk_gb"`
-	Domain      string   `json:"domain"`
-	IPAddress   string   `json:"ip_address,omitempty"`
-	SubnetMask  string   `json:"subnet_mask,omitempty"` // E.g. "255.255.255.0"
-	Gateway     string   `json:"gateway,omitempty"`     // Default gateway
-	DNSServers  []string `json:"dns_servers"`
-	DNSSuffixes []string `json:"dns_suffixes,omitempty"` // DNS search suffixes
+	Name     string `json:"name"`
+	Template string `json:"template"`
+	CPUs     int32  `json:"cpus"`
+	MemoryGB int    `json:"memory_gb"`
+
+	// Disks - list of disk sizes in GB (for additional disks: D:, E:, F:, etc.)
+	DisksGB          []int  `json:"disks_gb,omitempty"`
+	DiskProvisioning string `json:"disk_provisioning,omitempty"` // thin, thick, or eagerzeroed
+
+	// Network adapters (empty = single DHCP adapter with legacy IP fields)
+	Adapters []NetworkAdapter `json:"adapters,omitempty"`
+
+	// Legacy single-NIC fields (used if Adapters is empty)
+	IPAddress  string `json:"ip_address,omitempty"`
+	SubnetMask string `json:"subnet_mask,omitempty"`
+	Gateway    string `json:"gateway,omitempty"`
+
+	// Domain settings (optional - empty = workgroup)
+	Domain          string `json:"domain,omitempty"`
+	MachineObjectOU string `json:"machine_object_ou,omitempty"` // OU for computer object
+
+	// DNS settings
+	DNSServers  []string `json:"dns_servers,omitempty"`
+	DNSSuffixes []string `json:"dns_suffixes,omitempty"`
+
+	// Autologon (0 = disabled)
+	AutologonCount int `json:"autologon_count,omitempty"`
+
+	// Deprecated: Use DisksGB instead. Kept for backwards compatibility.
+	DiskGB int `json:"disk_gb,omitempty"`
 }
 
 // Validate validates ServerRequest and returns a ValidationError if something is wrong
@@ -873,6 +941,8 @@ func (r *ServerRequest) Validate() error {
 	if r.Template == "" {
 		return &ValidationError{Field: "Template", Message: "template is required"}
 	}
+
+	// Validate legacy single-NIC fields
 	if r.IPAddress != "" {
 		if r.SubnetMask == "" {
 			return &ValidationError{Field: "SubnetMask", Message: "subnet mask is required when using static IP"}
@@ -881,13 +951,35 @@ func (r *ServerRequest) Validate() error {
 			return &ValidationError{Field: "Gateway", Message: "gateway is required when using static IP"}
 		}
 	}
+
+	// Validate multi-NIC adapters
+	for i, adapter := range r.Adapters {
+		if adapter.IPAddress != "" {
+			if adapter.SubnetMask == "" {
+				return &ValidationError{Field: fmt.Sprintf("Adapters[%d].SubnetMask", i), Message: "subnet mask is required when using static IP"}
+			}
+			if adapter.Gateway == "" {
+				return &ValidationError{Field: fmt.Sprintf("Adapters[%d].Gateway", i), Message: "gateway is required when using static IP"}
+			}
+		}
+	}
+
 	return nil
 }
 
 // CloneFromRequest clones a virtual machine based on a ServerRequest struct.
 //
-// The function validates the request, creates a customization spec based on IP configuration
-// (static or DHCP), clones the VM, and sets CPU/memory if specified.
+// The function implements the CORRECT operation order for VM cloning with customization:
+//  1. Clone VM with powerOn=false (customization attached but doesn't run yet)
+//  2. Add extra disks while VM is powered off (safe operation)
+//  3. Change CPU/memory while VM is powered off (safe operation)
+//  4. Power on VM (this triggers guest customization/sysprep)
+//  5. Wait for customization to complete using WaitForCustomization
+//
+// This order is critical because:
+//   - Sysprep only runs when the VM boots for the first time after clone
+//   - Modifying hardware while powered off is safer
+//   - Logging in before sysprep completes can break the installation
 //
 // Parameters:
 //   - ctx: Context for timeout and cancellation
@@ -907,15 +999,16 @@ func (r *ServerRequest) Validate() error {
 // Example:
 //
 //	req := vcenter.ServerRequest{
-//	    Name: "WebServer01",
+//	    Name:     "WebServer01",
 //	    Template: "Win2022-Template",
-//	    CPUs: 4,
+//	    CPUs:     4,
 //	    MemoryGB: 8,
-//	    Domain: "example.com",
-//	    IPAddress: "192.168.1.100",
-//	    SubnetMask: "255.255.255.0",
-//	    Gateway: "192.168.1.1",
-//	    DNSServers: []string{"192.168.1.1"},
+//	    Domain:   "example.com",
+//	    Adapters: []vcenter.NetworkAdapter{
+//	        {IPAddress: "192.168.1.100", SubnetMask: "255.255.255.0", Gateway: "192.168.1.1"},
+//	    },
+//	    DNSServers:      []string{"192.168.1.1"},
+//	    MachineObjectOU: "OU=Servers,DC=example,DC=com",
 //	}
 //	vm, err := vcenter.CloneFromRequest(ctx, client, req, "DC1",
 //	    "datastore1", "Resources", "", "admin@example.com",
@@ -926,60 +1019,80 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 		return nil, err
 	}
 
+	log.Printf("Starting clone operation for %s...", req.Name)
+
 	// Create DNS suffixes if not specified
 	dnsSuffixes := req.DNSSuffixes
 	if len(dnsSuffixes) == 0 && req.Domain != "" {
 		dnsSuffixes = []string{req.Domain}
 	}
 
+	// Build network adapters from request
+	var adapters []NetworkAdapter
+	if len(req.Adapters) > 0 {
+		// Use multi-NIC configuration
+		adapters = req.Adapters
+	} else if req.IPAddress != "" {
+		// Legacy single static IP
+		adapters = []NetworkAdapter{{
+			IPAddress:  req.IPAddress,
+			SubnetMask: req.SubnetMask,
+			Gateway:    req.Gateway,
+			DNSServers: req.DNSServers,
+		}}
+	}
+	// else: empty adapters = DHCP
+
 	// Create customization spec when domain settings or networking overrides are requested
 	var customization *types.CustomizationSpec
-	needsCustomization := req.Domain != "" || req.IPAddress != "" || len(req.DNSServers) > 0 || len(dnsSuffixes) > 0
+	needsCustomization := req.Domain != "" || len(adapters) > 0 || len(req.DNSServers) > 0 || len(dnsSuffixes) > 0
 	if needsCustomization {
-		if req.IPAddress != "" {
-			// Static IP
-			customization = NewWindowsCustomizationStaticIP(
-				req.Name,
-				req.Domain,
-				domainUser,
-				domainPassword,
-				adminPassword,
-				timezone,
-				req.IPAddress,
-				req.SubnetMask,
-				req.Gateway,
-				req.DNSServers,
-				dnsSuffixes,
-			)
-		} else {
-			// DHCP / domain join only
-			customization = NewWindowsCustomization(
-				req.Name,
-				req.Domain,
-				domainUser,
-				domainPassword,
-				adminPassword,
-				timezone,
-				req.DNSServers,
-				dnsSuffixes,
-			)
+		customization = NewWindowsCustomization(WindowsCustomizationConfig{
+			ComputerName:    req.Name,
+			AdminPassword:   adminPassword,
+			Timezone:        timezone,
+			Domain:          req.Domain,
+			DomainUser:      domainUser,
+			DomainPassword:  domainPassword,
+			MachineObjectOU: req.MachineObjectOU,
+			Adapters:        adapters,
+			GlobalDNS:       req.DNSServers,
+			DNSSuffixes:     dnsSuffixes,
+			AutologonCount:  req.AutologonCount,
+		})
+		log.Printf("  Customization spec created: domain=%s, adapters=%d", req.Domain, len(adapters))
+	}
+
+	// === CORRECT ORDER OF OPERATIONS ===
+
+	// Step 1: Clone VM with powerOn=false (customization attached but doesn't run yet)
+	log.Printf("  Step 1: Cloning VM with powerOn=false...")
+	vm, err := cloneVMInternal(ctx, client, req.Template, req.Name, datacenter, datastore, resourcePool, folder, customization, false)
+	if err != nil {
+		return nil, fmt.Errorf("clone failed: %w", err)
+	}
+	log.Printf("  Clone completed (VM is powered off)")
+
+	// Step 2: Add extra disks while VM is powered off
+	disks := req.DisksGB
+	if len(disks) == 0 && req.DiskGB > 0 {
+		// Legacy single disk field
+		disks = []int{req.DiskGB}
+	}
+
+	if len(disks) > 0 {
+		log.Printf("  Step 2: Adding %d disk(s) while VM is off...", len(disks))
+		for i, diskSizeGB := range disks {
+			diskLetter := string(rune('D' + i)) // D, E, F, ...
+			log.Printf("    Adding %dGB disk (%s:)", diskSizeGB, diskLetter)
+			err = AddDisk(ctx, vm, diskSizeGB, datastore)
+			if err != nil {
+				return vm, fmt.Errorf("VM created but failed to add disk %s: %w", diskLetter, err)
+			}
 		}
 	}
 
-	// Clone VM
-	var vm *object.VirtualMachine
-	var err error
-	if customization != nil {
-		vm, err = CloneVMWithCustomization(ctx, client, req.Template, req.Name, datacenter, datastore, resourcePool, folder, customization)
-	} else {
-		vm, err = CloneVM(ctx, client, req.Template, req.Name, datacenter, datastore, resourcePool, folder)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	// Change resources if specified
+	// Step 3: Change CPU/memory while VM is powered off
 	if req.CPUs > 0 || req.MemoryGB > 0 {
 		cpus := req.CPUs
 		if cpus == 0 {
@@ -990,12 +1103,35 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 			memoryMB = 4096 // Default 4GB
 		}
 
+		log.Printf("  Step 3: Setting resources: %d CPUs, %dMB RAM", cpus, memoryMB)
 		err = SetVMResources(ctx, vm, cpus, memoryMB)
 		if err != nil {
 			return vm, fmt.Errorf("VM created but failed to set resources: %w", err)
 		}
 	}
 
+	// Step 4: Power on VM (this triggers guest customization/sysprep)
+	log.Printf("  Step 4: Powering on VM (this triggers customization)...")
+	err = PowerOnVM(ctx, vm)
+	if err != nil {
+		return vm, fmt.Errorf("VM created but failed to power on: %w", err)
+	}
+	log.Printf("  VM powered on successfully")
+
+	// Step 5: Wait for customization to complete (if customization was applied)
+	if customization != nil {
+		log.Printf("  Step 5: Waiting for customization to complete...")
+		customizationTimeout := 15 * time.Minute
+		err = WaitForCustomization(ctx, vm, customizationTimeout)
+		if err != nil {
+			// Don't fail the whole operation - VM is created, customization might still work
+			log.Printf("  WARNING: Customization wait issue: %v", err)
+		} else {
+			log.Printf("  Customization completed successfully")
+		}
+	}
+
+	log.Printf("Clone operation for %s completed successfully", req.Name)
 	return vm, nil
 }
 

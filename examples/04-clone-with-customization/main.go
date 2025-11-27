@@ -27,17 +27,17 @@ func main() {
 	}
 	defer client.Logout(ctx)
 
-	// Create Windows customization spec with DHCP
-	customization := vcenter.NewWindowsCustomization(
-		"WebServer01",                    // Computer name
-		"example.com",                    // AD Domain
-		"administrator@example.com",      // Domain admin user
-		"DomainPassword123!",             // Domain password
-		"LocalAdminPass123!",             // Local admin password
-		85,                               // Timezone (85 = W. Europe Standard Time)
-		[]string{"192.168.1.1"},          // DNS servers
-		[]string{"example.com"},          // DNS suffixes
-	)
+	// Create Windows customization spec with DHCP and domain join
+	customization := vcenter.NewWindowsCustomization(vcenter.WindowsCustomizationConfig{
+		ComputerName:   "WebServer01",
+		AdminPassword:  "LocalAdminPass123!",
+		Timezone:       85, // W. Europe Standard Time
+		Domain:         "example.com",
+		DomainUser:     "administrator@example.com",
+		DomainPassword: "DomainPassword123!",
+		GlobalDNS:      []string{"192.168.1.1"},
+		DNSSuffixes:    []string{"example.com"},
+	})
 
 	log.Println("Starting clone with Windows customization...")
 
@@ -57,16 +57,16 @@ func main() {
 		log.Fatalf("Failed to clone VM: %v", err)
 	}
 
-	log.Printf("✓ VM cloned: %s", vm.Name())
+	log.Printf("VM cloned: %s", vm.Name())
 	log.Println("VM starts automatically for customization...")
 
-	// Wait for VMware Tools
-	log.Println("Waiting for VMware Tools...")
-	err = vcenter.WaitForTools(ctx, vm)
+	// Wait for customization to complete (recommended approach)
+	log.Println("Waiting for customization to complete...")
+	err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute)
 	if err != nil {
-		log.Printf("Warning: VMware Tools timeout: %v", err)
+		log.Printf("Warning: Customization timeout: %v", err)
 	} else {
-		log.Println("✓ VMware Tools is ready")
+		log.Println("Customization completed!")
 	}
 
 	// Wait for IP address
@@ -75,8 +75,8 @@ func main() {
 	if err != nil {
 		log.Printf("Warning: IP timeout: %v", err)
 	} else {
-		log.Printf("✓ VM IP: %s", ip)
+		log.Printf("VM IP: %s", ip)
 	}
 
-	log.Println("✓ Done! VM is now domain-joined and ready to use")
+	log.Println("Done! VM is now domain-joined and ready to use")
 }

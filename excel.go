@@ -154,7 +154,7 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 	addValidation := func(col string, options []string) {
 		dvRange := fmt.Sprintf("%s2:%s200", col, col)
 		dv := excelize.NewDataValidation(true)
-		dv.Sqref = fmt.Sprintf("%s!%s", vmRequestSheet, dvRange)
+		dv.Sqref = dvRange
 		if len(options) == 0 {
 			return
 		}
