@@ -1,14 +1,15 @@
 package vcenter
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/vmware/govmomi"
@@ -1133,113 +1134,6 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 
 	log.Printf("Clone operation for %s completed successfully", req.Name)
 	return vm, nil
-}
-
-// ============================================================================
-// Batch Operations
-// ============================================================================
-
-// CloneMultiple clones multiple virtual machines in parallel.
-//
-// The function uses goroutines to clone multiple VMs simultaneously, which
-// greatly improves performance compared to sequential cloning.
-//
-// Parameters: Same as CloneFromRequest, plus a list of ServerRequests
-//
-// Returns:
-//   - A slice with successfully cloned VMs
-//   - A slice with errors (indexed same as requests, nil for successful ones)
-//
-// Example:
-//
-//	requests := []vcenter.ServerRequest{
-//	    {Name: "Web01", Template: "Win2022-Template", ...},
-//	    {Name: "Web02", Template: "Win2022-Template", ...},
-//	}
-//	vms, errors := vcenter.CloneMultiple(ctx, client, requests,
-//	    "DC1", "datastore1", "Resources", "", "admin@example.com",
-//	    "domainpass", "adminpass", 85)
-//	// Note: datastore parameter can be either a datastore name or a datastore cluster name
-//	for i, err := range errors {
-//	    if err != nil {
-//	        log.Printf("Failed to clone %s: %v", requests[i].Name, err)
-//	    }
-//	}
-func CloneMultiple(ctx context.Context, client *govmomi.Client, requests []ServerRequest, datacenter, datastore, resourcePool, folder string, domainUser, domainPassword, adminPassword string, timezone int) ([]*object.VirtualMachine, []error) {
-	var wg sync.WaitGroup
-	vms := make([]*object.VirtualMachine, len(requests))
-	errors := make([]error, len(requests))
-
-	for i, req := range requests {
-		wg.Add(1)
-		go func(idx int, r ServerRequest) {
-			defer wg.Done()
-			vm, err := CloneFromRequest(ctx, client, r, datacenter, datastore, resourcePool, folder, domainUser, domainPassword, adminPassword, timezone)
-			vms[idx] = vm
-			errors[idx] = err
-		}(i, req)
-	}
-
-	wg.Wait()
-
-	// Collect all VMs that were successful
-	successfulVMs := make([]*object.VirtualMachine, 0)
-	var firstError error
-	for i, vm := range vms {
-		if errors[i] == nil && vm != nil {
-			successfulVMs = append(successfulVMs, vm)
-		} else if errors[i] != nil && firstError == nil {
-			firstError = errors[i]
-		}
-	}
-
-	return successfulVMs, errors
-}
-
-// BulkPowerOperation performs power operations on multiple virtual machines in parallel.
-//
-// The function uses goroutines to perform operations on multiple VMs simultaneously.
-//
-// Parameters:
-//   - ctx: Context for timeout and cancellation
-//   - vms: List of VirtualMachine objects to operate on
-//   - operation: Operation to perform ("on", "off", or "restart")
-//
-// Returns a slice with errors (indexed same as vms, nil for successful ones).
-//
-// Example:
-//
-//	errors := vcenter.BulkPowerOperation(ctx, vms, "on")
-//	for i, err := range errors {
-//	    if err != nil {
-//	        log.Printf("Failed to power on VM %d: %v", i, err)
-//	    }
-//	}
-func BulkPowerOperation(ctx context.Context, vms []*object.VirtualMachine, operation string) []error {
-	var wg sync.WaitGroup
-	errors := make([]error, len(vms))
-
-	for i, vm := range vms {
-		wg.Add(1)
-		go func(idx int, v *object.VirtualMachine) {
-			defer wg.Done()
-			var err error
-			switch operation {
-			case "on":
-				err = PowerOnVM(ctx, v)
-			case "off":
-				err = PowerOffVM(ctx, v)
-			case "restart":
-				err = RestartVM(ctx, v)
-			default:
-				err = fmt.Errorf("unknown operation: %s (valid: on, off, restart)", operation)
-			}
-			errors[idx] = err
-		}(i, vm)
-	}
-
-	wg.Wait()
-	return errors
 }
 
 // ============================================================================
@@ -2810,6 +2704,290 @@ func UploadAndRunScript(ctx context.Context, vm *object.VirtualMachine, guestUse
 	return pid, nil
 }
 
-// NOTE: For directory operations (UploadDirectoryToVM, DownloadDirectoryFromVM),
-// use the govmomi/guest package directly. These operations are complex and require
-// recursive file handling, which is better suited for direct API usage.
+// UploadDirectoryToVM uploads an entire directory to a VM by zipping it locally,
+// uploading the zip, extracting on the guest, and cleaning up.
+//
+// This is much faster than uploading files one by one (single HTTP request vs many).
+// Works on both Windows and Linux guests.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - guestUsername: Username for guest OS
+//   - guestPassword: Password for guest OS user
+//   - localDir: Local directory to upload
+//   - remoteDir: Destination directory on guest OS
+//   - isWindows: True for Windows guest, false for Linux
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	err := vcenter.UploadDirectoryToVM(ctx, vm, "Administrator", "password",
+//	    "/local/configs", "C:\\App\\configs", true)
+func UploadDirectoryToVM(ctx context.Context, vm *object.VirtualMachine, guestUsername string, guestPassword string, localDir string, remoteDir string, isWindows bool) error {
+	// Verify local directory exists
+	info, err := os.Stat(localDir)
+	if err != nil {
+		return fmt.Errorf("failed to access local directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", localDir)
+	}
+
+	// Create temporary zip file
+	tmpZip, err := os.CreateTemp("", "vcenter-upload-*.zip")
+	if err != nil {
+		return fmt.Errorf("failed to create temp zip file: %w", err)
+	}
+	tmpZipPath := tmpZip.Name()
+	defer os.Remove(tmpZipPath)
+
+	// Zip the directory
+	if err := zipDirectory(localDir, tmpZip); err != nil {
+		tmpZip.Close()
+		return fmt.Errorf("failed to zip directory: %w", err)
+	}
+	tmpZip.Close()
+
+	// Determine remote paths based on OS
+	var remoteZipPath string
+	var extractCmd string
+	var extractArgs []string
+	var cleanupCmd string
+	var cleanupArgs []string
+
+	if isWindows {
+		remoteZipPath = "C:\\Windows\\Temp\\vcenter-upload-" + fmt.Sprintf("%d", time.Now().UnixNano()) + ".zip"
+		extractCmd = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+		extractArgs = []string{
+			"-NoProfile", "-NonInteractive", "-Command",
+			fmt.Sprintf("Expand-Archive -Path '%s' -DestinationPath '%s' -Force", remoteZipPath, remoteDir),
+		}
+		cleanupCmd = "C:\\Windows\\System32\\cmd.exe"
+		cleanupArgs = []string{"/c", "del", "/f", "/q", remoteZipPath}
+	} else {
+		remoteZipPath = "/tmp/vcenter-upload-" + fmt.Sprintf("%d", time.Now().UnixNano()) + ".zip"
+		extractCmd = "/usr/bin/unzip"
+		extractArgs = []string{"-o", "-q", remoteZipPath, "-d", remoteDir}
+		cleanupCmd = "/bin/rm"
+		cleanupArgs = []string{"-f", remoteZipPath}
+	}
+
+	// Upload zip file
+	if err := UploadFileToVM(ctx, vm, guestUsername, guestPassword, tmpZipPath, remoteZipPath, true); err != nil {
+		return fmt.Errorf("failed to upload zip file: %w", err)
+	}
+
+	// Extract on guest
+	_, err = RunScriptOnVM(ctx, vm, guestUsername, guestPassword, extractCmd, extractArgs, "", true)
+	if err != nil {
+		// Try to clean up zip file even if extract failed
+		RunScriptOnVM(ctx, vm, guestUsername, guestPassword, cleanupCmd, cleanupArgs, "", false)
+		return fmt.Errorf("failed to extract zip on guest: %w", err)
+	}
+
+	// Clean up zip file on guest
+	_, err = RunScriptOnVM(ctx, vm, guestUsername, guestPassword, cleanupCmd, cleanupArgs, "", true)
+	if err != nil {
+		// Non-fatal, just log
+		log.Printf("Warning: failed to clean up remote zip file: %v", err)
+	}
+
+	return nil
+}
+
+// DownloadDirectoryFromVM downloads an entire directory from a VM by zipping it
+// on the guest, downloading the zip, and extracting locally.
+//
+// This is much faster than downloading files one by one.
+// Works on both Windows and Linux guests.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - guestUsername: Username for guest OS
+//   - guestPassword: Password for guest OS user
+//   - remoteDir: Directory on guest OS to download
+//   - localDir: Local destination directory
+//   - isWindows: True for Windows guest, false for Linux
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	err := vcenter.DownloadDirectoryFromVM(ctx, vm, "Administrator", "password",
+//	    "C:\\App\\logs", "/local/logs", true)
+func DownloadDirectoryFromVM(ctx context.Context, vm *object.VirtualMachine, guestUsername string, guestPassword string, remoteDir string, localDir string, isWindows bool) error {
+	// Determine remote paths and commands based on OS
+	var remoteZipPath string
+	var zipCmd string
+	var zipArgs []string
+	var cleanupCmd string
+	var cleanupArgs []string
+
+	if isWindows {
+		remoteZipPath = "C:\\Windows\\Temp\\vcenter-download-" + fmt.Sprintf("%d", time.Now().UnixNano()) + ".zip"
+		zipCmd = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+		zipArgs = []string{
+			"-NoProfile", "-NonInteractive", "-Command",
+			fmt.Sprintf("Compress-Archive -Path '%s\\*' -DestinationPath '%s' -Force", remoteDir, remoteZipPath),
+		}
+		cleanupCmd = "C:\\Windows\\System32\\cmd.exe"
+		cleanupArgs = []string{"/c", "del", "/f", "/q", remoteZipPath}
+	} else {
+		remoteZipPath = "/tmp/vcenter-download-" + fmt.Sprintf("%d", time.Now().UnixNano()) + ".zip"
+		zipCmd = "/usr/bin/zip"
+		zipArgs = []string{"-r", "-q", remoteZipPath, "."}
+		cleanupCmd = "/bin/rm"
+		cleanupArgs = []string{"-f", remoteZipPath}
+	}
+
+	// Create zip on guest
+	var workDir string
+	if !isWindows {
+		workDir = remoteDir // zip command needs to run from directory on Linux
+	}
+	_, err := RunScriptOnVM(ctx, vm, guestUsername, guestPassword, zipCmd, zipArgs, workDir, true)
+	if err != nil {
+		return fmt.Errorf("failed to create zip on guest: %w", err)
+	}
+
+	// Create temporary local zip file
+	tmpZip, err := os.CreateTemp("", "vcenter-download-*.zip")
+	if err != nil {
+		RunScriptOnVM(ctx, vm, guestUsername, guestPassword, cleanupCmd, cleanupArgs, "", false)
+		return fmt.Errorf("failed to create temp zip file: %w", err)
+	}
+	tmpZipPath := tmpZip.Name()
+	tmpZip.Close()
+	defer os.Remove(tmpZipPath)
+
+	// Download zip file
+	if err := DownloadFileFromVM(ctx, vm, guestUsername, guestPassword, remoteZipPath, tmpZipPath); err != nil {
+		RunScriptOnVM(ctx, vm, guestUsername, guestPassword, cleanupCmd, cleanupArgs, "", false)
+		return fmt.Errorf("failed to download zip file: %w", err)
+	}
+
+	// Clean up zip file on guest
+	_, err = RunScriptOnVM(ctx, vm, guestUsername, guestPassword, cleanupCmd, cleanupArgs, "", true)
+	if err != nil {
+		log.Printf("Warning: failed to clean up remote zip file: %v", err)
+	}
+
+	// Extract locally
+	if err := os.MkdirAll(localDir, 0755); err != nil {
+		return fmt.Errorf("failed to create local directory: %w", err)
+	}
+
+	if err := unzipFile(tmpZipPath, localDir); err != nil {
+		return fmt.Errorf("failed to extract zip locally: %w", err)
+	}
+
+	return nil
+}
+
+// zipDirectory creates a zip archive of a directory
+func zipDirectory(sourceDir string, targetFile *os.File) error {
+	zipWriter := zip.NewWriter(targetFile)
+	defer zipWriter.Close()
+
+	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Get relative path
+		relPath, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+
+		// Skip the root directory itself
+		if relPath == "." {
+			return nil
+		}
+
+		// Create zip header
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = filepath.ToSlash(relPath)
+
+		if info.IsDir() {
+			header.Name += "/"
+		} else {
+			header.Method = zip.Deflate
+		}
+
+		writer, err := zipWriter.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+
+		_, err = io.Copy(writer, file)
+		return err
+	})
+}
+
+// unzipFile extracts a zip archive to a directory
+func unzipFile(zipPath string, destDir string) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		destPath := filepath.Join(destDir, file.Name)
+
+		// Security check: ensure path doesn't escape destination
+		if !strings.HasPrefix(filepath.Clean(destPath), filepath.Clean(destDir)) {
+			return fmt.Errorf("illegal file path in zip: %s", file.Name)
+		}
+
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(destPath, file.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Ensure parent directory exists
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return err
+		}
+
+		destFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		if err != nil {
+			return err
+		}
+
+		srcFile, err := file.Open()
+		if err != nil {
+			destFile.Close()
+			return err
+		}
+
+		_, err = io.Copy(destFile, srcFile)
+		srcFile.Close()
+		destFile.Close()
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

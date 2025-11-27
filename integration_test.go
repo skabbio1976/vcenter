@@ -355,81 +355,81 @@ func Test07_NetworkOperations(t *testing.T) {
 	t.Logf("✓ Verified adapter addition (%d -> %d adapters)", initialNICCount, len(infoAfter.Networks))
 }
 
-// Test08_BatchOperations tests parallel VM cloning
-func Test08_BatchOperations(t *testing.T) {
-	testdata.SkipIfNoConfig(t)
-	t.Log("\n=== Test 08: Batch Operations ===")
+// // Test08_BatchOperations tests parallel VM cloning
+// func Test08_BatchOperations(t *testing.T) {
+// 	testdata.SkipIfNoConfig(t)
+// 	t.Log("\n=== Test 08: Batch Operations ===")
 
-	ctx := context.Background()
-	client, config := testdata.GetTestClient(t, ctx)
-	defer client.Logout(ctx)
+// 	ctx := context.Background()
+// 	client, config := testdata.GetTestClient(t, ctx)
+// 	defer client.Logout(ctx)
 
-	// Create ServerRequest array for batch cloning
-	requests := []vcenter.ServerRequest{
-		{
-			Name:     testdata.GenerateTestVMName(config.TestResources.TestVMPrefix, "batch1"),
-			Template: config.TestResources.TemplateName,
-			CPUs:     2,
-			MemoryGB: 4,
-		},
-		{
-			Name:     testdata.GenerateTestVMName(config.TestResources.TestVMPrefix, "batch2"),
-			Template: config.TestResources.TemplateName,
-			CPUs:     2,
-			MemoryGB: 4,
-		},
-		{
-			Name:     testdata.GenerateTestVMName(config.TestResources.TestVMPrefix, "batch3"),
-			Template: config.TestResources.TemplateName,
-			CPUs:     2,
-			MemoryGB: 4,
-		},
-	}
+// 	// Create ServerRequest array for batch cloning
+// 	requests := []vcenter.ServerRequest{
+// 		{
+// 			Name:     testdata.GenerateTestVMName(config.TestResources.TestVMPrefix, "batch1"),
+// 			Template: config.TestResources.TemplateName,
+// 			CPUs:     2,
+// 			MemoryGB: 4,
+// 		},
+// 		{
+// 			Name:     testdata.GenerateTestVMName(config.TestResources.TestVMPrefix, "batch2"),
+// 			Template: config.TestResources.TemplateName,
+// 			CPUs:     2,
+// 			MemoryGB: 4,
+// 		},
+// 		{
+// 			Name:     testdata.GenerateTestVMName(config.TestResources.TestVMPrefix, "batch3"),
+// 			Template: config.TestResources.TemplateName,
+// 			CPUs:     2,
+// 			MemoryGB: 4,
+// 		},
+// 	}
 
-	t.Logf("Test VM names: %v", []string{requests[0].Name, requests[1].Name, requests[2].Name})
+// 	t.Logf("Test VM names: %v", []string{requests[0].Name, requests[1].Name, requests[2].Name})
 
-	defer func() {
-		// Cleanup all VMs
-		for _, req := range requests {
-			if config.TestOptions.AutoCleanup {
-				testdata.CleanupTestVM(t, ctx, client, req.Name)
-			} else {
-				t.Logf("  ⚠ Skipping cleanup (auto_cleanup=false), VM remains: %s", req.Name)
-			}
-		}
-	}()
+// 	defer func() {
+// 		// Cleanup all VMs
+// 		for _, req := range requests {
+// 			if config.TestOptions.AutoCleanup {
+// 				testdata.CleanupTestVM(t, ctx, client, req.Name)
+// 			} else {
+// 				t.Logf("  ⚠ Skipping cleanup (auto_cleanup=false), VM remains: %s", req.Name)
+// 			}
+// 		}
+// 	}()
 
-	// Clone multiple VMs in parallel
-	t.Logf("Cloning %d VMs in parallel...", len(requests))
-	vms, errors := vcenter.CloneMultiple(
-		ctx,
-		client.Client,
-		requests,
-		client.GetDatacenterName(),
-		config.TestResources.Datastore,
-		config.TestResources.ResourcePool,
-		config.TestResources.Folder,
-		"", "", "", // No domain credentials
-		85, // Timezone (W. Europe Standard Time)
-	)
+// 	// Clone multiple VMs in parallel
+// 	t.Logf("Cloning %d VMs in parallel...", len(requests))
+// 	vms, errors := vcenter.CloneMultiple(
+// 		ctx,
+// 		client.Client,
+// 		requests,
+// 		client.GetDatacenterName(),
+// 		config.TestResources.Datastore,
+// 		config.TestResources.ResourcePool,
+// 		config.TestResources.Folder,
+// 		"", "", "", // No domain credentials
+// 		85, // Timezone (W. Europe Standard Time)
+// 	)
 
-	// Check results
-	successCount := 0
-	for i, vm := range vms {
-		if errors[i] != nil {
-			t.Logf("  ✗ %s -> Error: %v", requests[i].Name, errors[i])
-		} else if vm != nil {
-			t.Logf("  ✓ %s -> %s", requests[i].Name, vm.Name())
-			successCount++
-		}
-	}
+// 	// Check results
+// 	successCount := 0
+// 	for i, vm := range vms {
+// 		if errors[i] != nil {
+// 			t.Logf("  ✗ %s -> Error: %v", requests[i].Name, errors[i])
+// 		} else if vm != nil {
+// 			t.Logf("  ✓ %s -> %s", requests[i].Name, vm.Name())
+// 			successCount++
+// 		}
+// 	}
 
-	if successCount == 0 {
-		t.Fatal("No VMs were cloned successfully")
-	}
+// 	if successCount == 0 {
+// 		t.Fatal("No VMs were cloned successfully")
+// 	}
 
-	t.Logf("✓ Successfully cloned %d/%d VMs", successCount, len(requests))
-}
+// 	t.Logf("✓ Successfully cloned %d/%d VMs", successCount, len(requests))
+// }
 
 // Test09_CompleteLifecycle tests a complete VM lifecycle
 func Test09_CompleteLifecycle(t *testing.T) {

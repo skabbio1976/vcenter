@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"log"
+	"sync"
 
 	"github.com/skabbio1976/vcenter"
 	"github.com/vmware/govmomi/object"
 )
 
 // This example demonstrates how to perform power operations on multiple VMs in parallel.
+// The API does not provide a BulkPowerOperation function by design - users control their
+// own concurrency, rate limiting, and error handling.
 func main() {
 	ctx := context.Background()
 
@@ -52,9 +55,21 @@ func main() {
 		log.Fatal("No VMs found")
 	}
 
-	// Power on all VMs in parallel
+	// Power on all VMs in parallel using goroutines
 	log.Printf("\nStarting %d VMs in parallel...", len(vms))
-	errors := vcenter.BulkPowerOperation(ctx, vms, "on")
+
+	var wg sync.WaitGroup
+	errors := make([]error, len(vms))
+
+	for i, vm := range vms {
+		wg.Add(1)
+		go func(idx int, v *object.VirtualMachine) {
+			defer wg.Done()
+			errors[idx] = vcenter.PowerOnVM(ctx, v)
+		}(i, vm)
+	}
+
+	wg.Wait()
 
 	successCount := 0
 	for i, err := range errors {
@@ -69,6 +84,6 @@ func main() {
 	log.Printf("\n✓ %d/%d VMs started successfully", successCount, len(vms))
 
 	// Examples of other operations:
-	// errors = vcenter.BulkPowerOperation(ctx, vms, "off")     // Power off all
-	// errors = vcenter.BulkPowerOperation(ctx, vms, "restart") // Restart all
+	// vcenter.PowerOffVM(ctx, vm)  // Power off
+	// vcenter.RestartVM(ctx, vm)   // Restart
 }
