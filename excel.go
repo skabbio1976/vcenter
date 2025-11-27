@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	vmRequestSheet   = "VM Requests"
-	validValuesSheet = "Valid Values"
-	instructionSheet = "Instruktioner"
+	vmRequestSheet      = "VM Requests"
+	validValuesSheet    = "Valid Values"
+	instructionSheetENG = "Instructions-EN"
+	instructionSheetSWE = "Instructions-SWE"
 )
 
 var requiredColumns = []string{"vm_name", "template", "port_group_1", "num_cpus", "memory_mb"}
@@ -29,6 +30,7 @@ type ExcelValidValues struct {
 	StorageClusters  []string
 	Datastores       []string
 	PortGroups       []string
+	SubnetMasks      []string
 	Domains          []string
 	Timezones        []string
 	CPUOptions       []int
@@ -47,6 +49,7 @@ func DefaultExcelValidValues() ExcelValidValues {
 		StorageClusters:  []string{"VSAN-Cluster-01", "VSAN-Cluster-02", "NFS-Cluster-01", "Backup-Cluster-01"},
 		Datastores:       []string{"VSAN-Datastore-01", "VSAN-Datastore-02", "NFS-Backup-01"},
 		PortGroups:       []string{"VLAN-100-Prod", "VLAN-200-Dev", "VLAN-300-Test", "VLAN-400-Mgmt"},
+		SubnetMasks:      []string{"255.255.254.0", "255.255.255.0", "255.255.255.128", "255.255.255.192", "255.255.255.224", "255.255.255.240"},
 		Domains:          []string{"corp.example.com", "dev.example.com", "test.example.com"},
 		Timezones:        []string{"W. Europe Standard Time", "Central European Standard Time", "UTC", "GMT Standard Time"},
 		CPUOptions:       []int{2, 4, 8, 16},
@@ -85,7 +88,7 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 		cell, _ := excelize.CoordinatesToCellName(colIdx+1, 1)
 		f.SetCellValue(vmRequestSheet, cell, header)
 		style, _ := f.NewStyle(&excelize.Style{
-			Font:      &excelize.Font{Bold: true, Color: "FFFFFFFF"},
+			Font:      &excelize.Font{Bold: true, Color: "#FFFFFF"},
 			Fill:      excelize.Fill{Type: "pattern", Color: []string{"#4472C4"}, Pattern: 1},
 			Alignment: &excelize.Alignment{Horizontal: "center"},
 		})
@@ -120,7 +123,7 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 		head := fmt.Sprintf("%s1", col)
 		f.SetCellValue(validValuesSheet, head, header)
 		style, _ := f.NewStyle(&excelize.Style{
-			Font: &excelize.Font{Bold: true, Color: "FFFFFFFF"},
+			Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
 			Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#4472C4"}},
 		})
 		f.SetCellStyle(validValuesSheet, head, head, style)
@@ -150,6 +153,7 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 	writeColumn("K", "Disk Options (GB)", intsToStrings(values.DiskOptions))
 	writeColumn("L", "Server Roles", values.ServerRoles)
 	writeColumn("M", "Disk Provisioning", values.DiskProvisioning)
+	writeColumn("N", "Subnet Masks", values.SubnetMasks)
 
 	addValidation := func(col string, options []string) {
 		dvRange := fmt.Sprintf("%s2:%s200", col, col)
@@ -172,6 +176,9 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 	addValidation("H", values.PortGroups)
 	addValidation("M", values.PortGroups)
 	addValidation("R", values.PortGroups)
+	addValidation("J", values.SubnetMasks)
+	addValidation("O", values.SubnetMasks)
+	addValidation("T", values.SubnetMasks)
 	addValidation("W", intsToStrings(values.CPUOptions))
 	addValidation("X", intsToStrings(values.MemoryOptions))
 	addValidation("Z", values.DiskProvisioning)
@@ -179,32 +186,293 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 	addValidation("AC", values.Domains)
 	addValidation("AG", values.Timezones)
 
-	instructions := [][]string{
-		{"VM Request Mall - Instruktioner"},
+	instructionWidths := map[string]float64{
+		"A": 32,
+		"B": 75,
+		"C": 22,
+		"D": 18,
+	}
+
+	headerStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Bold:  true,
+			Size:  16,
+			Color: "#FFFFFF",
+		},
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Pattern: 1,
+			Color:   []string{"#2F5597"},
+		},
+		Alignment: &excelize.Alignment{
+			Horizontal: "left",
+			Vertical:   "center",
+		},
+	})
+
+	subHeaderStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Bold:  true,
+			Size:  14,
+			Color: "#FFFFFF",
+		},
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Pattern: 1,
+			Color:   []string{"#3C78D8"},
+		},
+		Alignment: &excelize.Alignment{
+			Horizontal: "left",
+			Vertical:   "center",
+		},
+	})
+
+	tableHeaderStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Bold:  true,
+			Color: "#FFFFFF",
+		},
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Pattern: 1,
+			Color:   []string{"#1F4E78"},
+		},
+		Alignment: &excelize.Alignment{
+			Horizontal: "center",
+			Vertical:   "center",
+		},
+	})
+
+	tableBodyStyle, _ := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{
+			Horizontal: "left",
+			Vertical:   "center",
+		},
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Pattern: 1,
+			Color:   []string{"#EEF2FA"},
+		},
+	})
+
+	bulletStyle, _ := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{
+			Horizontal: "left",
+			Vertical:   "center",
+		},
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Pattern: 1,
+			Color:   []string{"#FFFFFF"},
+		},
+	})
+
+	subHeaderTitles := map[string]struct{}{
+		"Så här använder du mallen:":             {},
+		"CIDR-tabell för subnet_mask-fälten":     {},
+		"How to use the template:":               {},
+		"CIDR reference for subnet_mask columns": {},
+	}
+
+	instructionsSwe := [][]string{
+		{"Instruktioner (SV)"},
 		{""},
-		{"Så här fyller du i mallen:"},
+		{"Så här använder du mallen:"},
+		{"1. Fyll i en rad per VM på fliken 'VM Requests'."},
+		{"2. Utgå från exempelraderna 2-9 och ersätt med dina värden."},
+		{"3. Använd dropdown-menyerna för kolumner med fördefinierade val."},
+		{"4. Lista flera värden med semikolon, t.ex. dns_servers '10.0.0.10;10.0.0.11'."},
+		{"5. Lämna IP-fält tomma eller skriv 'DHCP' för dynamisk adressering."},
 		{""},
-		{"1. Fyll i en rad per VM i fliken 'VM Requests'"},
-		{"2. Rad 2-9 (gröna) är exempel – skriv över dem"},
-		{"3. Använd dropdown-menyer där de finns"},
-		{"4. Listor (dns_servers, disk_gb) separeras med semikolon"},
+		{"Kolumn", "Beskrivning"},
+		{"vm_name", "Unikt namn på VM:n. Måste vara unikt per arbetsbok."},
+		{"template", "VMware-mall från listan 'Templates' på fliken 'Valid Values'."},
+		{"datacenter", "Datacenter i vCenter. Lämna tomt om global konfiguration används."},
+		{"compute_cluster", "Compute-kluster där VM:n ska köras."},
+		{"storage_cluster", "Storage-kluster att använda (valfritt om datastore anges direkt)."},
+		{"datastore", "Specifik datastore för VM:n. Lämna blankt för att låta policyn välja."},
+		{"folder", "Målmapp i inventariet, t.ex. 'Production/Servers'."},
+		{"port_group_1", "Obligatorisk port group för NIC1. Måste finnas i listan 'Port Groups'."},
+		{"ip_1", "IP-adress för NIC1 eller 'DHCP' för dynamisk konfiguration."},
+		{"subnet_mask_1", "Subnet mask för NIC1 vid statisk IP (se tabellen nedan)."},
+		{"gateway_1", "Gateway för NIC1 vid statisk IP."},
+		{"dns_servers_1", "Semikolonseparerad lista med DNS-servrar för NIC1 (t.ex. '10.0.0.10;10.0.0.11')."},
+		{"port_group_2", "Valfritt: port group för andra nätverkskortet."},
+		{"ip_2", "IP-adress eller 'DHCP' för NIC2. Lämna tomt om adaptern saknar IP."},
+		{"subnet_mask_2", "Subnet mask för NIC2 vid statisk IP."},
+		{"gateway_2", "Lämnas normalt tom. Extra gateways kan orsaka routingproblem."},
+		{"dns_servers_2", "Semikolonseparerad lista med DNS-servrar för NIC2."},
+		{"port_group_3", "Valfritt: port group för tredje nätverkskortet."},
+		{"ip_3", "IP-adress eller 'DHCP' för NIC3."},
+		{"subnet_mask_3", "Subnet mask för NIC3 vid statisk IP."},
+		{"gateway_3", "Lämnas normalt tom."},
+		{"dns_servers_3", "Semikolonseparerad lista med DNS-servrar för NIC3."},
+		{"num_cpus", "Antal vCPU:er. Värdet måste finnas i listan 'CPU Options'."},
+		{"memory_mb", "RAM i MB. Välj från listan 'Memory Options'."},
+		{"disk_gb", "Semikolonseparerad lista över extra diskar i GB, t.ex. '50;100'. Lämna tomt för inga extra diskar."},
+		{"disk_provisioning", "Välj 'thin' eller 'thick'."},
+		{"server_role", "Serverroll från listan 'Server Roles'."},
+		{"hostname", "Hostname som sätts i gäst-OS."},
+		{"domain", "AD-domän som VM:n ska gå med i. Krävs om domänjoin används."},
+		{"domain_join_user", "Konto med rättigheter att gå med i domänen (valfritt vid manuell join)."},
+		{"ou_path", "LDAP-sökväg, t.ex. 'OU=Servers,DC=corp,DC=example,DC=com'."},
+		{"autologon_count", "Antal gånger administratörskontot ska logga in automatiskt."},
+		{"timezone", "Tidszon enligt listan 'Timezones'."},
+		{"run_once_commands", "Semikolonseparerade kommandon som körs efter första inloggningen."},
 		{""},
-		{"Nyckelkolumner:"},
-		{"• disk_gb - EXTRA diskar, format: '50;100;200'"},
-		{"• port_group_1 - Obligatorisk, övriga NIC:ar valfria"},
-		{"• Skriv 'DHCP' i IP-fältet om du vill använda DHCP"},
-		{"• disk_provisioning - 'thin' eller 'thick'"},
-		{"• server_role - DC, CA, CRL, Member, T0-RDS, T1-RDS, File, SQL, Web, Standalone"},
+		{"CIDR-tabell för subnet_mask-fälten:"},
+		{"CIDR", "Nätmask", "Totalt antal IP-adresser", "Max värdar"},
+		{"/23", "255.255.254.0", "512", "510"},
+		{"/24", "255.255.255.0", "256", "254"},
+		{"/25", "255.255.255.128", "128", "126"},
+		{"/26", "255.255.255.192", "64", "62"},
+		{"/27", "255.255.255.224", "32", "30"},
+		{"/28", "255.255.255.240", "16", "14"},
 		{""},
 		{"Se README.md för fullständig dokumentation."},
 	}
-	if _, err := f.NewSheet(instructionSheet); err != nil {
+
+	instructionsEng := [][]string{
+		{"Instructions (EN)"},
+		{""},
+		{"How to use the template:"},
+		{"1. Enter one row per VM on the 'VM Requests' sheet."},
+		{"2. Start from the sample rows (2-9) and overwrite them with your values."},
+		{"3. Use the dropdowns wherever predefined options exist."},
+		{"4. Separate multiple values with semicolons, e.g. dns_servers '10.0.0.10;10.0.0.11'."},
+		{"5. Leave IP fields blank or type 'DHCP' for dynamic addressing."},
+		{""},
+		{"Column", "Description"},
+		{"vm_name", "Unique name for the VM. Must be unique within this workbook."},
+		{"template", "VMware template from the 'Templates' list on the 'Valid Values' sheet."},
+		{"datacenter", "vCenter datacenter for the VM. Leave blank if provided by global configuration."},
+		{"compute_cluster", "Compute cluster where the VM will run."},
+		{"storage_cluster", "Storage cluster to use (optional when a datastore is specified)."},
+		{"datastore", "Specific datastore for the VM. Leave blank to let policy pick one."},
+		{"folder", "Target inventory folder, e.g. 'Production/Servers'."},
+		{"port_group_1", "Required port group for NIC1. Must exist in the 'Port Groups' list."},
+		{"ip_1", "Static IP for NIC1 or 'DHCP' for dynamic configuration."},
+		{"subnet_mask_1", "Subnet mask for NIC1 when using a static IP (see table below)."},
+		{"gateway_1", "Default gateway for NIC1 when a static IP is set."},
+		{"dns_servers_1", "Semicolon-separated DNS servers for NIC1 (e.g. '10.0.0.10;10.0.0.11')."},
+		{"port_group_2", "Optional port group for the second NIC."},
+		{"ip_2", "Static IP or 'DHCP' for NIC2. Leave blank if the adapter has no IP."},
+		{"subnet_mask_2", "Subnet mask for NIC2 when using a static IP."},
+		{"gateway_2", "Should normally be left blank; additional gateways can cause routing issues."},
+		{"dns_servers_2", "Semicolon-separated DNS servers for NIC2."},
+		{"port_group_3", "Optional port group for the third NIC."},
+		{"ip_3", "Static IP or 'DHCP' for NIC3."},
+		{"subnet_mask_3", "Subnet mask for NIC3 when using a static IP."},
+		{"gateway_3", "Should normally be left blank."},
+		{"dns_servers_3", "Semicolon-separated DNS servers for NIC3."},
+		{"num_cpus", "Number of vCPUs. Must match a value in the 'CPU Options' list."},
+		{"memory_mb", "RAM in MB. Choose a value from the 'Memory Options' list."},
+		{"disk_gb", "Semicolon-separated list of additional disks in GB, e.g. '50;100'. Leave blank for none."},
+		{"disk_provisioning", "Choose 'thin' or 'thick'."},
+		{"server_role", "Server role from the 'Server Roles' list."},
+		{"hostname", "Hostname assigned inside the guest OS."},
+		{"domain", "Active Directory domain to join. Required when performing a domain join."},
+		{"domain_join_user", "Account with permissions to join the domain (optional for manual join)."},
+		{"ou_path", "LDAP path, e.g. 'OU=Servers,DC=corp,DC=example,DC=com'."},
+		{"autologon_count", "Number of times the Administrator account should log on automatically."},
+		{"timezone", "Time zone value from the 'Timezones' list."},
+		{"run_once_commands", "Semicolon-separated commands that run after the first logon."},
+		{""},
+		{"CIDR reference for subnet_mask columns:"},
+		{"CIDR", "Netmask", "Total IP addresses", "Max hosts"},
+		{"/23", "255.255.254.0", "512", "510"},
+		{"/24", "255.255.255.0", "256", "254"},
+		{"/25", "255.255.255.128", "128", "126"},
+		{"/26", "255.255.255.192", "64", "62"},
+		{"/27", "255.255.255.224", "32", "30"},
+		{"/28", "255.255.255.240", "16", "14"},
+		{""},
+		{"See README.md for full documentation."},
+	}
+
+	writeInstructionSheet := func(sheet string, data [][]string) error {
+		if _, err := f.NewSheet(sheet); err != nil {
+			return err
+		}
+		inTable := false
+		for rowIdx, row := range data {
+			for colIdx, value := range row {
+				cell, _ := excelize.CoordinatesToCellName(colIdx+1, rowIdx+1)
+				f.SetCellValue(sheet, cell, value)
+			}
+
+			style := bulletStyle
+			switch {
+			case rowIdx == 0:
+				style = headerStyle
+				if err := f.SetRowHeight(sheet, rowIdx+1, 28); err != nil {
+					return err
+				}
+			case len(row) == 1:
+				trimmed := strings.TrimSpace(row[0])
+				if trimmed != "" {
+					if _, ok := subHeaderTitles[trimmed]; ok {
+						style = subHeaderStyle
+						if err := f.SetRowHeight(sheet, rowIdx+1, 22); err != nil {
+							return err
+						}
+					} else {
+						style = bulletStyle
+					}
+				}
+			case len(row) > 1:
+				if !inTable {
+					style = tableHeaderStyle
+					inTable = true
+					if err := f.SetRowHeight(sheet, rowIdx+1, 20); err != nil {
+						return err
+					}
+				} else {
+					style = tableBodyStyle
+				}
+			default:
+				style = bulletStyle
+			}
+
+			startCol := 1
+			endCol := len(row)
+			if endCol == 0 {
+				endCol = 1
+			}
+			switch {
+			case style == headerStyle || style == subHeaderStyle:
+				if endCol < 4 {
+					endCol = 4
+				}
+			case style == tableHeaderStyle || style == tableBodyStyle:
+				if endCol < 4 {
+					endCol = 4
+				}
+			}
+			startCell, _ := excelize.CoordinatesToCellName(startCol, rowIdx+1)
+			endCell, _ := excelize.CoordinatesToCellName(endCol, rowIdx+1)
+			f.SetCellStyle(sheet, startCell, endCell, style)
+
+			if len(row) == 1 && row[0] == "" {
+				inTable = false
+			}
+		}
+		for col, width := range instructionWidths {
+			f.SetColWidth(sheet, col, col, width)
+		}
+		showGridLines := false
+		if err := f.SetSheetView(sheet, 0, &excelize.ViewOptions{ShowGridLines: &showGridLines}); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := writeInstructionSheet(instructionSheetSWE, instructionsSwe); err != nil {
 		return err
 	}
-	for rowIdx, row := range instructions {
-		f.SetCellValue(instructionSheet, fmt.Sprintf("A%d", rowIdx+1), row[0])
+	if err := writeInstructionSheet(instructionSheetENG, instructionsEng); err != nil {
+		return err
 	}
-	f.SetColWidth(instructionSheet, "A", "A", 80)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
