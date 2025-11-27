@@ -11,12 +11,20 @@ A user-friendly Go library for VMware vCenter, inspired by PowerCLI. This packag
 
 - **VM Management**
   - Clone VMs from templates
-  - Windows and Linux customization (with domain join for Windows)
+  - Windows and Linux customization (domain join, static IP, multi-NIC)
   - CPU and memory configuration
   - Power operations (on/off/restart)
   - Delete and unregister VMs
   - Get detailed VM information
   - Support for datastore clusters (Storage DRS)
+
+- **Guest Customization**
+  - Windows Sysprep with domain join or workgroup
+  - Linux customization
+  - Multi-NIC support with per-adapter IP configuration
+  - MachineObjectOU for AD placement
+  - Autologon support
+  - **Reliable customization completion detection** (hostname-based)
 
 - **Snapshot Operations**
   - Create, delete, revert snapshots
@@ -103,6 +111,91 @@ if err != nil {
 defer client.Logout(ctx)
 ```
 
+## Exported Types and Functions
+
+### Types
+
+| Type | Description |
+|------|-------------|
+| `NetworkAdapter` | Network adapter configuration for multi-NIC customization |
+| `WindowsCustomizationConfig` | All settings for Windows customization (domain, IP, autologon, etc.) |
+| `LinuxCustomizationConfig` | All settings for Linux customization |
+| `ServerRequest` | Structured VM request with full configuration |
+| `SnapshotInfo` | Snapshot metadata |
+| `VMInfo` | Detailed VM information |
+| `NetworkInfo` | Network adapter information |
+
+### Customization Functions
+
+| Function | Description |
+|----------|-------------|
+| `NewWindowsCustomization(cfg)` | Create Windows customization spec (supports all scenarios) |
+| `NewLinuxCustomization(cfg)` | Create Linux customization spec (supports all scenarios) |
+
+### Clone Functions
+
+| Function | Description |
+|----------|-------------|
+| `CloneVM()` | Clone VM without customization (powered off) |
+| `CloneVMWithCustomization()` | Clone VM with customization (powers on) |
+| `CloneFromRequest()` | Clone from ServerRequest with correct operation order |
+| `CloneMultiple()` | Clone multiple VMs in parallel |
+
+### Wait Functions
+
+| Function | Description |
+|----------|-------------|
+| `WaitForCustomization()` | Wait for guest customization to complete (hostname-based detection) |
+| `WaitForTools()` | Wait for VMware Tools to be ready |
+| `WaitForIP()` | Wait for VM to get a routable IP address |
+
+### Power Functions
+
+| Function | Description |
+|----------|-------------|
+| `PowerOnVM()` | Power on a VM |
+| `PowerOffVM()` | Power off a VM |
+| `RestartVM()` | Restart a VM (graceful or hard) |
+| `BulkPowerOperation()` | Power operations on multiple VMs |
+
+### Disk Functions
+
+| Function | Description |
+|----------|-------------|
+| `AddDisk()` | Add a new disk to VM |
+| `ExtendDisk()` | Extend existing disk |
+| `RemoveDisk()` | Remove disk from VM |
+
+### Network Functions
+
+| Function | Description |
+|----------|-------------|
+| `AddNetworkAdapter()` | Add network adapter |
+| `ChangeNetwork()` | Change network on adapter |
+
+### Snapshot Functions
+
+| Function | Description |
+|----------|-------------|
+| `CreateSnapshot()` | Create snapshot |
+| `DeleteSnapshot()` | Delete snapshot |
+| `ListSnapshots()` | List all snapshots |
+| `RevertToSnapshot()` | Revert to snapshot |
+| `DeleteAllSnapshots()` | Delete all snapshots |
+| `GetCurrentSnapshot()` | Get current snapshot |
+
+### Other Functions
+
+| Function | Description |
+|----------|-------------|
+| `GetVM()` | Find VM by name |
+| `GetVMInfo()` | Get detailed VM info |
+| `SetVMResources()` | Change CPU/memory |
+| `DeleteVM()` | Delete VM |
+| `UnregisterVM()` | Unregister VM |
+| `MountISO()` / `UnmountISO()` | ISO operations |
+| `ConnectCDROM()` / `DisconnectCDROM()` | CD/DVD operations |
+
 ## Examples
 
 ### Clone a VM
@@ -125,20 +218,20 @@ if err != nil {
 log.Printf("VM cloned: %s\n", vm.Name())
 ```
 
-### Clone with Windows customization (domain join)
+### Clone with Windows customization (domain join, DHCP)
 
 ```go
-// Create customization spec for domain join
-customization := vcenter.NewWindowsCustomization(
-    "WebServer01",                    // computer name
-    "example.com",                    // domain
-    "administrator@example.com",      // domain admin user
-    "domainPassword",                 // domain password
-    "localAdminPassword",             // local admin password
-    85,                               // timezone (85 = W. Europe Standard Time)
-    []string{"192.168.1.1"},          // DNS servers
-    []string{"example.com"},          // DNS suffixes
-)
+// Create customization spec for domain join with DHCP
+customization := vcenter.NewWindowsCustomization(vcenter.WindowsCustomizationConfig{
+    ComputerName:   "WebServer01",
+    AdminPassword:  "localAdminPassword",
+    Timezone:       85, // W. Europe Standard Time
+    Domain:         "example.com",
+    DomainUser:     "administrator@example.com",
+    DomainPassword: "domainPassword",
+    GlobalDNS:      []string{"192.168.1.1"},
+    DNSSuffixes:    []string{"example.com"},
+})
 
 // Clone VM with customization
 vm, err := vcenter.CloneVMWithCustomization(
@@ -156,59 +249,118 @@ if err != nil {
     log.Fatal(err)
 }
 
-// Wait for VMware Tools to be ready
-err = vcenter.WaitForTools(ctx, vm)
+// Wait for customization to complete (recommended!)
+err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute)
 if err != nil {
-    log.Printf("Warning: VMware Tools timeout: %v\n", err)
+    log.Printf("Warning: Customization timeout: %v\n", err)
 }
 
-// Get IP address
-ip, err := vcenter.WaitForIP(ctx, vm, 10*time.Minute)
-if err != nil {
-    log.Printf("Warning: IP timeout: %v\n", err)
-} else {
-    log.Printf("VM IP: %s\n", ip)
-}
+log.Printf("VM ready! IP: check with GetVMInfo()")
 ```
 
 ### Clone with static IP
 
 ```go
-customization := vcenter.NewWindowsCustomizationStaticIP(
-    "DBServer01",
-    "example.com",
-    "administrator@example.com",
-    "domainPassword",
-    "localAdminPassword",
-    85,                          // timezone
-    "192.168.1.100",            // IP address
-    "255.255.255.0",            // subnet mask
-    "192.168.1.1",              // gateway
-    []string{"192.168.1.1"},    // DNS servers
-    []string{"example.com"},    // DNS suffixes
-)
+customization := vcenter.NewWindowsCustomization(vcenter.WindowsCustomizationConfig{
+    ComputerName:   "DBServer01",
+    AdminPassword:  "localAdminPassword",
+    Timezone:       85,
+    Domain:         "example.com",
+    DomainUser:     "administrator@example.com",
+    DomainPassword: "domainPassword",
+    // Static IP via Adapters
+    Adapters: []vcenter.NetworkAdapter{{
+        IPAddress:  "192.168.1.100",
+        SubnetMask: "255.255.255.0",
+        Gateway:    "192.168.1.1",
+        DNSServers: []string{"192.168.1.1"},
+    }},
+    GlobalDNS:   []string{"192.168.1.1"},
+    DNSSuffixes: []string{"example.com"},
+})
 
 vm, err := vcenter.CloneVMWithCustomization(ctx, client.Client,
     "Windows-2022-Template", "DBServer01", "Datacenter1",
     "datastore1", "Resources", "", customization)
 ```
 
-### Use ServerRequest for structured configuration
+### Clone with multi-NIC configuration
+
+```go
+customization := vcenter.NewWindowsCustomization(vcenter.WindowsCustomizationConfig{
+    ComputerName:   "AppServer01",
+    AdminPassword:  "localAdminPassword",
+    Timezone:       85,
+    Domain:         "example.com",
+    DomainUser:     "administrator@example.com",
+    DomainPassword: "domainPassword",
+    MachineObjectOU: "OU=Servers,DC=example,DC=com", // Place in specific OU
+    // Multiple network adapters
+    Adapters: []vcenter.NetworkAdapter{
+        {
+            Network:    "Production-VLAN100",
+            IPAddress:  "10.1.1.50",
+            SubnetMask: "255.255.255.0",
+            Gateway:    "10.1.1.1",
+            DNSServers: []string{"10.1.1.10"},
+        },
+        {
+            Network:    "Management-VLAN200",
+            IPAddress:  "10.2.1.50",
+            SubnetMask: "255.255.255.0",
+            Gateway:    "10.2.1.1",
+        },
+    },
+    GlobalDNS:      []string{"10.1.1.10"},
+    DNSSuffixes:    []string{"example.com"},
+    AutologonCount: 1, // Auto-login once for post-install scripts
+})
+```
+
+### Clone standalone Windows (workgroup, no domain)
+
+```go
+customization := vcenter.NewWindowsCustomization(vcenter.WindowsCustomizationConfig{
+    ComputerName:  "TestServer01",
+    AdminPassword: "localAdminPassword",
+    Timezone:      85,
+    // No Domain = joins WORKGROUP
+    Adapters: []vcenter.NetworkAdapter{{
+        IPAddress:  "192.168.1.200",
+        SubnetMask: "255.255.255.0",
+        Gateway:    "192.168.1.1",
+    }},
+})
+```
+
+### Use ServerRequest for structured configuration (recommended for complex deployments)
 
 ```go
 req := vcenter.ServerRequest{
-    Name:        "AppServer01",
-    Template:    "Windows-2022-Template",
-    CPUs:        4,
-    MemoryGB:    16,
-    Domain:      "example.com",
-    IPAddress:   "192.168.1.101",
-    SubnetMask:  "255.255.255.0",
-    Gateway:     "192.168.1.1",
-    DNSServers:  []string{"192.168.1.1", "192.168.1.2"},
-    DNSSuffixes: []string{"example.com"},
+    Name:     "AppServer01",
+    Template: "Windows-2022-Template",
+    CPUs:     4,
+    MemoryGB: 16,
+    // Multiple disks (D:, E:, F:, ...)
+    DisksGB: []int{100, 200}, // D: 100GB, E: 200GB
+    // Multi-NIC
+    Adapters: []vcenter.NetworkAdapter{
+        {IPAddress: "192.168.1.101", SubnetMask: "255.255.255.0", Gateway: "192.168.1.1"},
+        {IPAddress: "10.0.0.101", SubnetMask: "255.255.255.0", Gateway: "10.0.0.1"},
+    },
+    Domain:          "example.com",
+    MachineObjectOU: "OU=AppServers,DC=example,DC=com",
+    DNSServers:      []string{"192.168.1.1", "192.168.1.2"},
+    DNSSuffixes:     []string{"example.com"},
+    AutologonCount:  1,
 }
 
+// CloneFromRequest implements the CORRECT operation order:
+// 1. Clone with powerOn=false
+// 2. Add disks (VM off)
+// 3. Set CPU/memory (VM off)
+// 4. Power on (triggers customization)
+// 5. WaitForCustomization
 vm, err := vcenter.CloneFromRequest(
     ctx,
     client.Client,
@@ -224,34 +376,56 @@ vm, err := vcenter.CloneFromRequest(
 )
 ```
 
+### Linux customization
+
+```go
+// Linux with DHCP
+customization := vcenter.NewLinuxCustomization(vcenter.LinuxCustomizationConfig{
+    Hostname:    "webserver01",
+    Domain:      "example.com",
+    GlobalDNS:   []string{"192.168.1.1"},
+    DNSSuffixes: []string{"example.com"},
+})
+
+// Linux with static IP
+customization := vcenter.NewLinuxCustomization(vcenter.LinuxCustomizationConfig{
+    Hostname: "webserver02",
+    Domain:   "example.com",
+    Adapters: []vcenter.NetworkAdapter{{
+        IPAddress:  "192.168.1.150",
+        SubnetMask: "255.255.255.0",
+        Gateway:    "192.168.1.1",
+    }},
+    GlobalDNS:   []string{"192.168.1.1"},
+    DNSSuffixes: []string{"example.com"},
+})
+
+// Linux multi-NIC
+customization := vcenter.NewLinuxCustomization(vcenter.LinuxCustomizationConfig{
+    Hostname: "appserver01",
+    Domain:   "example.com",
+    Adapters: []vcenter.NetworkAdapter{
+        {IPAddress: "10.1.1.20", SubnetMask: "255.255.255.0", Gateway: "10.1.1.1"},
+        {IPAddress: "10.2.1.20", SubnetMask: "255.255.255.0", Gateway: "10.2.1.1"},
+    },
+    GlobalDNS: []string{"10.1.1.1"},
+})
+
+vm, err := vcenter.CloneVMWithCustomization(
+    ctx, client.Client,
+    "Ubuntu-22.04-Template", "webserver01",
+    "Datacenter1", "datastore1", "Resources", "",
+    customization,
+)
+```
+
 ### Clone multiple VMs in parallel
 
 ```go
 requests := []vcenter.ServerRequest{
-    {
-        Name:     "Web01",
-        Template: "Windows-2022-Template",
-        CPUs:     2,
-        MemoryGB: 4,
-        Domain:   "example.com",
-        DNSServers: []string{"192.168.1.1"},
-    },
-    {
-        Name:     "Web02",
-        Template: "Windows-2022-Template",
-        CPUs:     2,
-        MemoryGB: 4,
-        Domain:   "example.com",
-        DNSServers: []string{"192.168.1.1"},
-    },
-    {
-        Name:     "Web03",
-        Template: "Windows-2022-Template",
-        CPUs:     2,
-        MemoryGB: 4,
-        Domain:   "example.com",
-        DNSServers: []string{"192.168.1.1"},
-    },
+    {Name: "Web01", Template: "Windows-2022-Template", CPUs: 2, MemoryGB: 4, Domain: "example.com"},
+    {Name: "Web02", Template: "Windows-2022-Template", CPUs: 2, MemoryGB: 4, Domain: "example.com"},
+    {Name: "Web03", Template: "Windows-2022-Template", CPUs: 2, MemoryGB: 4, Domain: "example.com"},
 }
 
 vms, errors := vcenter.CloneMultiple(
@@ -268,7 +442,6 @@ vms, errors := vcenter.CloneMultiple(
     85,
 )
 
-// Check results
 for i, err := range errors {
     if err != nil {
         log.Printf("Failed to clone %s: %v\n", requests[i].Name, err)
@@ -281,384 +454,125 @@ for i, err := range errors {
 ### Power operations
 
 ```go
-// Find a VM
 vm, err := vcenter.GetVM(ctx, client.Client, "WebServer01", "Datacenter1")
 if err != nil {
     log.Fatal(err)
 }
 
-// Power on VM
 err = vcenter.PowerOnVM(ctx, vm)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Power off VM
 err = vcenter.PowerOffVM(ctx, vm)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Restart VM (graceful with VMware Tools, otherwise hard reset)
-err = vcenter.RestartVM(ctx, vm)
-if err != nil {
-    log.Fatal(err)
-}
+err = vcenter.RestartVM(ctx, vm) // Graceful with Tools, otherwise hard reset
 ```
 
 ### Bulk power operations
 
 ```go
-// Find multiple VMs
 vms := []*object.VirtualMachine{vm1, vm2, vm3}
-
-// Power on all VMs in parallel
-errors := vcenter.BulkPowerOperation(ctx, vms, "on")
-for i, err := range errors {
-    if err != nil {
-        log.Printf("VM %d: %v\n", i, err)
-    }
-}
-
-// Other operations: "off", "restart"
+errors := vcenter.BulkPowerOperation(ctx, vms, "on") // "on", "off", "restart"
 ```
 
 ### Disk management
 
 ```go
-// Add a 100GB disk
-err = vcenter.AddDisk(ctx, vm, 100, "datastore1")
-if err != nil {
-    log.Fatal(err)
-}
-
-// Extend a disk from 100GB to 200GB
-err = vcenter.ExtendDisk(ctx, vm, "Hard disk 2", 200)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Remove a disk (WARNING: Permanently deletes data!)
-err = vcenter.RemoveDisk(ctx, vm, "Hard disk 3")
-if err != nil {
-    log.Fatal(err)
-}
+err = vcenter.AddDisk(ctx, vm, 100, "datastore1")    // Add 100GB disk
+err = vcenter.ExtendDisk(ctx, vm, "Hard disk 2", 200) // Extend to 200GB
+err = vcenter.RemoveDisk(ctx, vm, "Hard disk 3")      // Remove disk
 ```
 
 ### Network management
 
 ```go
-// Add a VMXNET3 network adapter
 err = vcenter.AddNetworkAdapter(ctx, vm, "Production-VLAN100")
-if err != nil {
-    log.Fatal(err)
-}
-
-// Change network on an existing adapter
 err = vcenter.ChangeNetwork(ctx, vm, "Network adapter 1", "DMZ-VLAN200")
-if err != nil {
-    log.Fatal(err)
-}
 ```
 
 ### Change CPU and memory
 
 ```go
-// Set 4 CPUs and 8GB RAM
-err = vcenter.SetVMResources(ctx, vm, 4, 8192)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-### Linux customization
-
-```go
-// Clone Linux VM with DHCP
-customization := vcenter.NewLinuxCustomization(
-    "webserver01",                        // hostname
-    "example.com",                        // domain (optional)
-    []string{"192.168.1.1"},              // DNS servers (optional)
-    []string{"example.com"},              // DNS suffixes (optional)
-)
-
-vm, err := vcenter.CloneVMWithCustomization(
-    ctx, client.Client,
-    "Ubuntu-22.04-Template", "webserver01",
-    "Datacenter1", "datastore1", "Resources", "",
-    customization,
-)
-
-// Clone Linux VM with static IP
-customization := vcenter.NewLinuxCustomizationStaticIP(
-    "webserver02",                        // hostname
-    "192.168.1.150",                      // IP address
-    "255.255.255.0",                      // netmask
-    "192.168.1.1",                        // gateway
-    []string{"192.168.1.1"},              // DNS servers
-    "example.com",                        // domain (optional)
-    []string{"example.com"},              // DNS suffixes (optional)
-)
+err = vcenter.SetVMResources(ctx, vm, 4, 8192) // 4 CPUs, 8GB RAM
 ```
 
 ### Snapshot operations
 
 ```go
-// Create a snapshot
-err = vcenter.CreateSnapshot(ctx, vm, "Before Update",
-    "Snapshot before applying updates", false, true)
-if err != nil {
-    log.Fatal(err)
-}
-
-// List all snapshots
+err = vcenter.CreateSnapshot(ctx, vm, "Before Update", "Snapshot before updates", false, true)
 snapshots, err := vcenter.ListSnapshots(ctx, vm)
-if err != nil {
-    log.Fatal(err)
-}
-for _, snap := range snapshots {
-    fmt.Printf("Snapshot: %s (created: %s)\n", snap.Name, snap.CreateTime)
-}
-
-// Revert to snapshot
 err = vcenter.RevertToSnapshot(ctx, vm, "Before Update", false)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Delete a specific snapshot
 err = vcenter.DeleteSnapshot(ctx, vm, "Before Update", false, true)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Delete all snapshots
 err = vcenter.DeleteAllSnapshots(ctx, vm, true)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Get current snapshot
 current, err := vcenter.GetCurrentSnapshot(ctx, vm)
-if err != nil {
-    log.Fatal(err)
-}
-if current != nil {
-    fmt.Printf("Current snapshot: %s\n", current.Name)
-}
 ```
 
 ### Get detailed VM information
 
 ```go
 info, err := vcenter.GetVMInfo(ctx, vm)
-if err != nil {
-    log.Fatal(err)
-}
-
 fmt.Printf("VM: %s\n", info.Name)
 fmt.Printf("Power State: %s\n", info.PowerState)
-fmt.Printf("CPUs: %d (%d sockets, %d cores per socket)\n",
-    info.CPUCount, info.CPUSockets, info.CPUCoresPerSocket)
+fmt.Printf("CPUs: %d\n", info.CPUCount)
 fmt.Printf("Memory: %.2f GB\n", info.MemoryGB)
-fmt.Printf("Guest OS: %s\n", info.GuestOSFullName)
 fmt.Printf("IP Address: %s\n", info.GuestIPAddress)
 fmt.Printf("Hostname: %s\n", info.GuestHostname)
-fmt.Printf("Tools Status: %s\n", info.ToolsStatus)
-
-// Network information
-for _, net := range info.Networks {
-    fmt.Printf("Network: %s - MAC: %s - IPs: %v\n",
-        net.Network, net.MACAddress, net.IPAddresses)
-}
 ```
 
 ### Delete or unregister VM
 
 ```go
-// Delete VM and remove all files from datastore
-err = vcenter.DeleteVM(ctx, vm, true, false)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Unregister VM from inventory (keep files)
-err = vcenter.UnregisterVM(ctx, vm)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Force delete a powered-on VM
-err = vcenter.DeleteVM(ctx, vm, true, true)
-if err != nil {
-    log.Fatal(err)
-}
+err = vcenter.DeleteVM(ctx, vm, true, false)  // Delete VM and files
+err = vcenter.UnregisterVM(ctx, vm)           // Unregister only (keep files)
+err = vcenter.DeleteVM(ctx, vm, true, true)   // Force delete powered-on VM
 ```
 
 ### CD/DVD operations
 
 ```go
-// Mount an ISO file
 err = vcenter.MountISO(ctx, vm, "ISOs/windows.iso", "datastore1", true)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Unmount ISO
 err = vcenter.UnmountISO(ctx, vm, true)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Connect CD/DVD drive
 err = vcenter.ConnectCDROM(ctx, vm)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Disconnect CD/DVD drive
 err = vcenter.DisconnectCDROM(ctx, vm)
-if err != nil {
-    log.Fatal(err)
-}
 ```
 
 ### Using Datastore Clusters (Storage DRS)
 
-All clone functions support both regular datastores and datastore clusters. When you specify
-a datastore cluster, the package automatically uses Storage DRS to select the best datastore
-based on space and I/O load.
+All clone functions automatically detect datastore clusters and use Storage DRS:
 
 ```go
-// Clone to a datastore cluster instead of a specific datastore
-vm, err := vcenter.CloneVM(
-    ctx,
-    client.Client,
-    "Windows-2022-Template",
-    "WebServer01",
-    "Datacenter1",
-    "Production-DatastoreCluster",  // Datastore cluster name
-    "Resources",
-    "WebServers",
-)
-
-// Also works with CloneFromRequest and CloneMultiple
-req := vcenter.ServerRequest{
-    Name:     "AppServer01",
-    Template: "Windows-2022-Template",
-    // ... other settings
-}
-
-vm, err = vcenter.CloneFromRequest(
-    ctx,
-    client.Client,
-    req,
-    "Datacenter1",
-    "Production-DatastoreCluster",  // Datastore cluster automatically detected
-    "Resources",
-    "AppServers",
-    "administrator@example.com",
-    "domainPassword",
-    "localAdminPassword",
-    85,
-)
+// Works with both regular datastores and datastore clusters
+vm, err := vcenter.CloneVM(ctx, client.Client,
+    "Windows-2022-Template", "WebServer01",
+    "Datacenter1", "Production-DatastoreCluster", // <- datastore cluster
+    "Resources", "WebServers")
 ```
 
-**Note:** The package automatically detects whether the specified name is a datastore cluster
-or a regular datastore. If it's a datastore cluster, Storage DRS will select the optimal
-datastore based on vCenter's recommendation engine.
+## WaitForCustomization - The Important Function
 
-## Configuration, Credentials & Excel Automation
+`WaitForCustomization` detects when Windows Sysprep or Linux customization is complete by checking:
 
-The Go API mirrors the higher-level helpers from the Python project, which makes it easy
-to bootstrap configuration files, encrypted credential stores, Excel templates, and even
-inventory snapshots directly from Go.
+1. **Hostname matches VM name** (before sysprep: `WIN-XXXXXXX`, after: configured name)
+2. **Valid IP address** (not link-local 169.254.x.x)
+3. **VMware Tools running**
 
-### Generate `vcenter_config.json`
+This is more reliable than event-based monitoring and works for both domain-joined and standalone VMs.
 
 ```go
-cfgPath := "vcenter_config.json"
-created, err := vcenter.EnsureConfigFile(cfgPath)
+// Always use after CloneVMWithCustomization
+err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute)
 if err != nil {
-    log.Fatal(err)
+    log.Printf("Customization may still be running: %v", err)
 }
-if created {
-    log.Printf("Created template config at %s", cfgPath)
-}
-```
-
-### Manage encrypted credentials
-
-```go
-store := vcenter.NewCredentialStore()
-store.AddCredential("vcenter", vcenter.Credential{
-    Server:   "vcenter.example.com",
-    Username: "administrator@vsphere.local",
-    Password: "SuperSecret!",
-    Insecure: true,
-})
-
-key, err := vcenter.GenerateEncryptionKey()
-if err != nil {
-    log.Fatal(err)
-}
-if err := store.SaveEncrypted("credentials.json.enc", vcenter.KeySourceDirect(key)); err != nil {
-    log.Fatal(err)
-}
-```
-
-### Excel workflow helpers
-
-```go
-if err := vcenter.CreateExcelTemplate("vm_requests.xlsx", nil); err != nil {
-    log.Fatal(err)
-}
-
-ok, messages, err := vcenter.ValidateExcel("vm_requests.xlsx", nil, false)
-if err != nil {
-    log.Fatal(err)
-}
-log.Printf("Template valid: %v (messages: %v)", ok, messages)
-
-configs, err := vcenter.ExcelToJSON("vm_requests.xlsx", "vm_configs")
-if err != nil {
-    log.Fatal(err)
-}
-log.Printf("Converted %d VM definitions to JSON files", len(configs))
-```
-
-### Inventory scanning
-
-```go
-inventory, err := vcenter.ScanVCenter(ctx, client.Client, vcenter.InventoryOptions{})
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Println("Datacenters:", inventory.Datacenters)
-fmt.Println("Clusters in first DC:", inventory.ComputeClusters[inventory.Datacenters[0]])
 ```
 
 ## Error Handling
 
-The package uses custom error types for better error handling:
-
 ```go
-vm, err := vcenter.GetVM(ctx, client.Client, "NonExistent", "DC1")
-if err != nil {
-    var notFoundErr *vcenter.NotFoundError
-    if errors.As(err, &notFoundErr) {
-        log.Printf("Resource not found: %s\n", notFoundErr)
-    }
+var notFoundErr *vcenter.NotFoundError
+if errors.As(err, &notFoundErr) {
+    log.Printf("Resource not found: %s\n", notFoundErr)
 }
 
-req := vcenter.ServerRequest{Name: ""}
-err = req.Validate()
-if err != nil {
-    var validationErr *vcenter.ValidationError
-    if errors.As(err, &validationErr) {
-        log.Printf("Validation error on field %s: %s\n",
-            validationErr.Field, validationErr.Message)
-    }
+var validationErr *vcenter.ValidationError
+if errors.As(err, &validationErr) {
+    log.Printf("Validation error on field %s: %s\n", validationErr.Field, validationErr.Message)
 }
 ```
 
@@ -667,12 +581,10 @@ if err != nil {
 Common timezone IDs for Windows customization:
 
 - `4` - Eastern Standard Time (EST)
-- `15` - U.S. Eastern Standard Time
 - `20` - Central Standard Time
 - `35` - Mountain Standard Time
 - `85` - W. Europe Standard Time (Stockholm, Berlin, Paris)
 - `105` - Pacific Standard Time (PST)
-- `110` - Alaska Standard Time
 - `220` - UTC
 
 Full list: https://docs.microsoft.com/en-us/previous-versions/windows/embedded/ms912391(v=winembedded.11)
@@ -683,7 +595,7 @@ MIT License - See LICENSE file for details.
 
 ## Contributing
 
-Pull requests are welcome! For major changes, please open an issue first to discuss what you would like to change.
+Pull requests are welcome! For major changes, please open an issue first.
 
 ## Credits
 
