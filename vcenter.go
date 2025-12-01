@@ -170,9 +170,15 @@ func cloneVMInternal(
 
 	var vmFolder *object.Folder
 	if folder != "" {
+		// Try the folder path as-is first
 		vmFolder, err = finder.Folder(ctx, folder)
 		if err != nil {
-			return nil, fmt.Errorf("folder not found: %w", err)
+			// If not found or ambiguous, try with full path under vm folder
+			fullPath := fmt.Sprintf("/%s/vm/%s", datacenter, folder)
+			vmFolder, err = finder.Folder(ctx, fullPath)
+			if err != nil {
+				return nil, fmt.Errorf("folder not found: %w", err)
+			}
 		}
 	} else {
 		folders, err := dc.Folders(ctx)
