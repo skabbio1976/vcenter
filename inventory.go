@@ -145,14 +145,11 @@ func ScanVCenter(ctx context.Context, client *govmomi.Client, opts InventoryOpti
 
 		// Folders
 		if includeFolders {
-			folders, err := dc.Folders(ctx)
-			if err == nil {
-				paths, err := collectFolderPaths(ctx, folders.VmFolder, dcName)
-				if err != nil {
-					return nil, err
-				}
-				inventory.Folders[dcName] = paths
+			paths, err := collectFolderPaths(ctx, dc, dcName)
+			if err != nil {
+				return nil, err
 			}
+			inventory.Folders[dcName] = paths
 		}
 
 		// Port groups / networks
@@ -196,37 +193,31 @@ func collectTemplates(ctx context.Context, viewMgr *view.Manager, dc *object.Dat
 	return list, nil
 }
 
-func collectFolderPaths(ctx context.Context, folder *object.Folder, dcName string) ([]string, error) {
-	acc := []string{}
-	err := collectFolderPathsRecursive(ctx, folder, dcName, &acc)
-	if err != nil {
-		return nil, err
-	}
-	return acc, nil
-}
+func collectFolderPaths(ctx context.Context, dc *object.Datacenter, dcName string) ([]string, error) {
+	finder := find.NewFinder(dc.Client(), true)
+	finder.SetDatacenter(dc)
 
-func collectFolderPathsRecursive(ctx context.Context, folder *object.Folder, dcName string, acc *[]string) error {
-	children, err := folder.Children(ctx)
+	// Use glob pattern to find all folders under the vm folder
+	folders, err := finder.FolderList(ctx, "vm/...")
 	if err != nil {
-		return fmt.Errorf("list folder children: %w", err)
+		// No folders found is not an error
+		return []string{}, nil
 	}
-	for _, child := range children {
-		switch item := child.(type) {
-		case *object.Folder:
-			path := item.InventoryPath
-			prefix := fmt.Sprintf("/%s/vm/", dcName)
-			if strings.HasPrefix(path, prefix) {
-				relative := strings.TrimPrefix(path, prefix)
-				if relative != "" {
-					*acc = append(*acc, relative)
-				}
-			}
-			if err := collectFolderPathsRecursive(ctx, item, dcName, acc); err != nil {
-				return err
+
+	prefix := fmt.Sprintf("/%s/vm/", dcName)
+	list := []string{}
+
+	for _, folder := range folders {
+		invPath := folder.InventoryPath
+		if strings.HasPrefix(invPath, prefix) {
+			relative := strings.TrimPrefix(invPath, prefix)
+			if relative != "" {
+				list = append(list, relative)
 			}
 		}
 	}
-	return nil
+
+	return list, nil
 }
 
 func collectNetworks(ctx context.Context, viewMgr *view.Manager, dc *object.Datacenter) ([]string, error) {

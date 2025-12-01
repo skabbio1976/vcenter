@@ -808,9 +808,7 @@ func WaitForTools(ctx context.Context, vm *object.VirtualMachine) error {
 		case <-ctx.Done():
 			return fmt.Errorf("timeout waiting for VMware Tools: %w", ctx.Err())
 		case <-ticker.C:
-			var vmProps struct {
-				Guest types.GuestInfo `mo:"guest"`
-			}
+			var vmProps mo.VirtualMachine
 			err := vm.Properties(ctx, vm.Reference(), []string{"guest"}, &vmProps)
 			if err != nil {
 				continue
@@ -869,17 +867,15 @@ func WaitForCustomization(ctx context.Context, vm *object.VirtualMachine, timeou
 		case <-ctx.Done():
 			return fmt.Errorf("customization timeout after %v on %s: %w", timeout, vmName, ctx.Err())
 		case <-ticker.C:
-			var props struct {
-				Guest types.GuestInfo `mo:"guest"`
-			}
-			err := vm.Properties(ctx, vm.Reference(), []string{"guest"}, &props)
+			var vmProps mo.VirtualMachine
+			err := vm.Properties(ctx, vm.Reference(), []string{"guest"}, &vmProps)
 			if err != nil {
 				continue
 			}
 
-			hostname := props.Guest.HostName
-			ip := props.Guest.IpAddress
-			toolsStatus := props.Guest.ToolsRunningStatus
+			hostname := vmProps.Guest.HostName
+			ip := vmProps.Guest.IpAddress
+			toolsStatus := vmProps.Guest.ToolsRunningStatus
 
 			// Check all three conditions:
 			// 1. Hostname matches VM name (handles both "srv001" and "srv001.domain.local")
@@ -1262,20 +1258,13 @@ func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int) error {
 //
 //	err := vcenter.ExtendDisk(ctx, vm, "Hard disk 2", 200) // Extend to 200GB
 func ExtendDisk(ctx context.Context, vm *object.VirtualMachine, diskLabel string, newSizeGB int) error {
-	var vprops struct {
-		Config struct {
-			Hardware struct {
-				Device []types.BaseVirtualDevice
-			}
-		}
-	}
-
-	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vprops)
+	var vmProps mo.VirtualMachine
+	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vmProps)
 	if err != nil {
 		return fmt.Errorf("failed to get VM properties: %w", err)
 	}
 
-	devices := object.VirtualDeviceList(vprops.Config.Hardware.Device)
+	devices := object.VirtualDeviceList(vmProps.Config.Hardware.Device)
 
 	// Find disk by label
 	var disk *types.VirtualDisk
@@ -1338,20 +1327,13 @@ func ExtendDisk(ctx context.Context, vm *object.VirtualMachine, diskLabel string
 //
 //	err := vcenter.RemoveDisk(ctx, vm, "Hard disk 2")
 func RemoveDisk(ctx context.Context, vm *object.VirtualMachine, diskLabel string) error {
-	var vprops struct {
-		Config struct {
-			Hardware struct {
-				Device []types.BaseVirtualDevice
-			}
-		}
-	}
-
-	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vprops)
+	var vmProps mo.VirtualMachine
+	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vmProps)
 	if err != nil {
 		return fmt.Errorf("failed to get VM properties: %w", err)
 	}
 
-	devices := object.VirtualDeviceList(vprops.Config.Hardware.Device)
+	devices := object.VirtualDeviceList(vmProps.Config.Hardware.Device)
 
 	// Find disk by label
 	var disk *types.VirtualDisk
@@ -1408,20 +1390,13 @@ func RemoveDisk(ctx context.Context, vm *object.VirtualMachine, diskLabel string
 //
 //	err := vcenter.AddNetworkAdapter(ctx, vm, "Production-VLAN100")
 func AddNetworkAdapter(ctx context.Context, vm *object.VirtualMachine, networkName string) error {
-	var vprops struct {
-		Config struct {
-			Hardware struct {
-				Device []types.BaseVirtualDevice
-			}
-		}
-	}
-
-	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vprops)
+	var vmProps mo.VirtualMachine
+	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vmProps)
 	if err != nil {
 		return fmt.Errorf("failed to get VM properties: %w", err)
 	}
 
-	devices := object.VirtualDeviceList(vprops.Config.Hardware.Device)
+	devices := object.VirtualDeviceList(vmProps.Config.Hardware.Device)
 
 	// Find network
 	finder := find.NewFinder(vm.Client(), true)
@@ -1476,20 +1451,13 @@ func AddNetworkAdapter(ctx context.Context, vm *object.VirtualMachine, networkNa
 //
 //	err := vcenter.ChangeNetwork(ctx, vm, "Network adapter 1", "DMZ-VLAN200")
 func ChangeNetwork(ctx context.Context, vm *object.VirtualMachine, adapterLabel string, newNetworkName string) error {
-	var vprops struct {
-		Config struct {
-			Hardware struct {
-				Device []types.BaseVirtualDevice
-			}
-		}
-	}
-
-	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vprops)
+	var vmProps mo.VirtualMachine
+	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vmProps)
 	if err != nil {
 		return fmt.Errorf("failed to get VM properties: %w", err)
 	}
 
-	devices := object.VirtualDeviceList(vprops.Config.Hardware.Device)
+	devices := object.VirtualDeviceList(vmProps.Config.Hardware.Device)
 
 	// Find network adapter by label
 	var adapter types.BaseVirtualDevice
