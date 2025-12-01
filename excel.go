@@ -155,36 +155,37 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 	writeColumn("M", "Disk Provisioning", values.DiskProvisioning)
 	writeColumn("N", "Subnet Masks", values.SubnetMasks)
 
-	addValidation := func(col string, options []string) {
+	// addValidationRef creates a dropdown that references the Valid Values sheet
+	// Users can edit the Valid Values sheet to add more options
+	addValidationRef := func(col string, validValuesCol string, maxRows int) {
 		dvRange := fmt.Sprintf("%s2:%s200", col, col)
 		dv := excelize.NewDataValidation(true)
 		dv.Sqref = dvRange
-		if len(options) == 0 {
-			return
-		}
-		if err := dv.SetDropList(options); err != nil {
-			return
-		}
+		// Reference the Valid Values sheet - use dynamic range up to maxRows
+		formula := fmt.Sprintf("'%s'!$%s$2:$%s$%d", validValuesSheet, validValuesCol, validValuesCol, maxRows+1)
+		dv.SetSqrefDropList(formula)
 		_ = f.AddDataValidation(vmRequestSheet, dv)
 	}
 
-	addValidation("B", values.Templates)
-	addValidation("C", values.Datacenters)
-	addValidation("D", values.ComputeClusters)
-	addValidation("E", values.StorageClusters)
-	addValidation("F", values.Datastores)
-	addValidation("H", values.PortGroups)
-	addValidation("M", values.PortGroups)
-	addValidation("R", values.PortGroups)
-	addValidation("J", values.SubnetMasks)
-	addValidation("O", values.SubnetMasks)
-	addValidation("T", values.SubnetMasks)
-	addValidation("W", intsToStrings(values.CPUOptions))
-	addValidation("X", intsToStrings(values.MemoryOptions))
-	addValidation("Z", values.DiskProvisioning)
-	addValidation("AA", values.ServerRoles)
-	addValidation("AC", values.Domains)
-	addValidation("AG", values.Timezones)
+	// Map validation columns in VM Requests to columns in Valid Values sheet
+	// Using 100 rows allows users to add more values in Valid Values sheet
+	addValidationRef("B", "A", 100)  // template -> Templates
+	addValidationRef("C", "B", 100)  // datacenter -> Datacenters
+	addValidationRef("D", "C", 100)  // compute_cluster -> Compute Clusters
+	addValidationRef("E", "D", 100)  // storage_cluster -> Storage Clusters
+	addValidationRef("F", "E", 100)  // datastore -> Datastores
+	addValidationRef("H", "F", 100)  // port_group_1 -> Port Groups
+	addValidationRef("M", "F", 100)  // port_group_2 -> Port Groups
+	addValidationRef("R", "F", 100)  // port_group_3 -> Port Groups
+	addValidationRef("J", "N", 100)  // subnet_mask_1 -> Subnet Masks
+	addValidationRef("O", "N", 100)  // subnet_mask_2 -> Subnet Masks
+	addValidationRef("T", "N", 100)  // subnet_mask_3 -> Subnet Masks
+	addValidationRef("W", "I", 100)  // num_cpus -> CPU Options
+	addValidationRef("X", "J", 100)  // memory_mb -> Memory Options
+	addValidationRef("Z", "M", 100)  // disk_provisioning -> Disk Provisioning
+	addValidationRef("AA", "L", 100) // server_role -> Server Roles
+	addValidationRef("AC", "G", 100) // domain -> Domains
+	addValidationRef("AG", "H", 100) // timezone -> Timezones
 
 	instructionWidths := map[string]float64{
 		"A": 32,
