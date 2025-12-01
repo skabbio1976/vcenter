@@ -1164,11 +1164,15 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 	}
 
 	if len(disks) > 0 {
-		log.Printf("  Step 2: Adding %d disk(s) while VM is off...", len(disks))
+		provisioning := req.DiskProvisioning
+		if provisioning == "" {
+			provisioning = "thin"
+		}
+		log.Printf("  Step 2: Adding %d disk(s) while VM is off (provisioning=%s)...", len(disks), provisioning)
 		for i, diskSizeGB := range disks {
 			diskLetter := string(rune('D' + i)) // D, E, F, ...
 			log.Printf("    Adding %dGB disk (%s:)", diskSizeGB, diskLetter)
-			err = AddDisk(ctx, vm, diskSizeGB)
+			err = AddDisk(ctx, vm, diskSizeGB, provisioning)
 			if err != nil {
 				return vm, fmt.Errorf("VM created but failed to add disk %s: %w", diskLetter, err)
 			}
@@ -1244,22 +1248,23 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 
 // AddDisk adds a new disk to a virtual machine.
 //
-// The disk is created as thin provisioned VMDK on the specified datastore.
-// The VM can be running during the operation (hot-add, if supported by VM).
-//
 // The disk is placed on the same datastore as the VM's existing OS disk.
+// The VM can be running during the operation (hot-add, if supported by VM).
 //
 // Parameters:
 //   - ctx: Context for timeout and cancellation
 //   - vm: VirtualMachine object to add disk to
 //   - sizeGB: Disk size in GB (e.g. 100 for 100GB)
+//   - provisioning: Disk provisioning type ("thin", "thick", or "eagerzeroed"). Empty defaults to "thin".
 //
 // Returns nil on success, otherwise an error.
 //
 // Example:
 //
-//	err := vcenter.AddDisk(ctx, vm, 100) // Add 100GB disk
-func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int) error {
+//	err := vcenter.AddDisk(ctx, vm, 100, "thin")       // Add 100GB thin disk
+//	err := vcenter.AddDisk(ctx, vm, 100, "thick")     // Add 100GB thick disk
+//	err := vcenter.AddDisk(ctx, vm, 100, "eagerzeroed") // Add 100GB eager zeroed thick disk
+func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int, provisioning string) error {
 	var vmProps mo.VirtualMachine
 	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vmProps)
 	if err != nil {
@@ -1288,13 +1293,29 @@ func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int) error {
 		return fmt.Errorf("could not determine datastore from VM's existing disks")
 	}
 
+	// Determine disk provisioning settings
+	var thinProvisioned *bool
+	var eagerlyScrub *bool
+	switch strings.ToLower(provisioning) {
+	case "thick":
+		thinProvisioned = types.NewBool(false)
+		eagerlyScrub = types.NewBool(false)
+	case "eagerzeroed", "eagerzeroedthick":
+		thinProvisioned = types.NewBool(false)
+		eagerlyScrub = types.NewBool(true)
+	default: // "thin" or empty
+		thinProvisioned = types.NewBool(true)
+		eagerlyScrub = nil
+	}
+
 	// Create new disk
 	disk := &types.VirtualDisk{
 		VirtualDevice: types.VirtualDevice{
 			Key: devices.NewKey(),
 			Backing: &types.VirtualDiskFlatVer2BackingInfo{
 				DiskMode:        string(types.VirtualDiskModePersistent),
-				ThinProvisioned: types.NewBool(true),
+				ThinProvisioned: thinProvisioned,
+				EagerlyScrub:    eagerlyScrub,
 				VirtualDeviceFileBackingInfo: types.VirtualDeviceFileBackingInfo{
 					Datastore: dsRef,
 				},

@@ -34,22 +34,22 @@ func main() {
 
 	log.Printf("Working with VM: %s\n", vm.Name())
 
-	// Add a 100GB disk (uses same datastore as VM's OS disk)
-	log.Println("\n1. Adding 100GB disk...")
-	err = vcenter.AddDisk(ctx, vm, 100)
+	// Add a 100GB thin disk (uses same datastore as VM's OS disk)
+	log.Println("\n1. Adding 100GB thin disk...")
+	err = vcenter.AddDisk(ctx, vm, 100, "thin")
 	if err != nil {
 		log.Printf("✗ Failed: %v", err)
 	} else {
-		log.Println("✓ 100GB disk added (Hard disk 2)")
+		log.Println("✓ 100GB thin disk added (Hard disk 2)")
 	}
 
-	// Add a 50GB disk
-	log.Println("\n2. Adding 50GB disk...")
-	err = vcenter.AddDisk(ctx, vm, 50)
+	// Add a 50GB thick disk
+	log.Println("\n2. Adding 50GB thick disk...")
+	err = vcenter.AddDisk(ctx, vm, 50, "thick")
 	if err != nil {
 		log.Printf("✗ Failed: %v", err)
 	} else {
-		log.Println("✓ 50GB disk added (Hard disk 3)")
+		log.Println("✓ 50GB thick disk added (Hard disk 3)")
 	}
 
 	// Extend a disk

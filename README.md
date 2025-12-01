@@ -188,7 +188,7 @@ defer client.Logout(ctx)
 
 | Function | Description |
 |----------|-------------|
-| `AddDisk()` | Add a new disk to VM (auto-detects datastore from VM) |
+| `AddDisk()` | Add a new disk to VM (thin/thick/eagerzeroed provisioning) |
 | `ExtendDisk()` | Extend existing disk |
 | `RemoveDisk()` | Remove disk from VM |
 
@@ -564,7 +564,9 @@ err = vcenter.RestartVM(ctx, vm) // Graceful with Tools, otherwise hard reset
 > [Full example: examples/08-disk-operations/](examples/08-disk-operations/main.go)
 
 ```go
-err = vcenter.AddDisk(ctx, vm, 100)                    // Add 100GB disk (uses VM's datastore)
+err = vcenter.AddDisk(ctx, vm, 100, "thin")            // Add 100GB thin disk
+err = vcenter.AddDisk(ctx, vm, 100, "thick")           // Add 100GB thick disk
+err = vcenter.AddDisk(ctx, vm, 100, "eagerzeroed")     // Add 100GB eager zeroed thick disk
 err = vcenter.ExtendDisk(ctx, vm, "Hard disk 2", 200) // Extend to 200GB
 err = vcenter.RemoveDisk(ctx, vm, "Hard disk 3")      // Remove disk
 ```
