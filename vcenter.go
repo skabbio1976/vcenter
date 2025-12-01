@@ -1107,7 +1107,7 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 		for i, diskSizeGB := range disks {
 			diskLetter := string(rune('D' + i)) // D, E, F, ...
 			log.Printf("    Adding %dGB disk (%s:)", diskSizeGB, diskLetter)
-			err = AddDisk(ctx, vm, diskSizeGB, datacenter, datastore)
+			err = AddDisk(ctx, vm, diskSizeGB)
 			if err != nil {
 				return vm, fmt.Errorf("VM created but failed to add disk %s: %w", diskLetter, err)
 			}
@@ -1166,19 +1166,19 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 // The disk is created as thin provisioned VMDK on the specified datastore.
 // The VM can be running during the operation (hot-add, if supported by VM).
 //
+// The disk is placed on the same datastore as the VM's existing OS disk.
+//
 // Parameters:
 //   - ctx: Context for timeout and cancellation
 //   - vm: VirtualMachine object to add disk to
 //   - sizeGB: Disk size in GB (e.g. 100 for 100GB)
-//   - datacenter: The name of the datacenter containing the datastore
-//   - datastoreName: The name of the datastore where the disk should be created
 //
 // Returns nil on success, otherwise an error.
 //
 // Example:
 //
-//	err := vcenter.AddDisk(ctx, vm, 100, "DC1", "datastore1") // Add 100GB disk
-func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int, datacenter, datastoreName string) error {
+//	err := vcenter.AddDisk(ctx, vm, 100) // Add 100GB disk
+func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int) error {
 	var vmProps mo.VirtualMachine
 	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vmProps)
 	if err != nil {
@@ -1193,17 +1193,18 @@ func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int, datacen
 		return fmt.Errorf("failed to find SCSI controller: %w", err)
 	}
 
-	// Find datastore with datacenter context
-	finder := find.NewFinder(vm.Client(), true)
-	dc, err := finder.Datacenter(ctx, datacenter)
-	if err != nil {
-		return fmt.Errorf("datacenter not found: %w", err)
+	// Get datastore from VM's existing disk (use same datastore as OS disk)
+	var dsRef *types.ManagedObjectReference
+	for _, device := range vmProps.Config.Hardware.Device {
+		if disk, ok := device.(*types.VirtualDisk); ok {
+			if backing, ok := disk.Backing.(*types.VirtualDiskFlatVer2BackingInfo); ok {
+				dsRef = backing.Datastore
+				break
+			}
+		}
 	}
-	finder.SetDatacenter(dc)
-
-	ds, err := finder.Datastore(ctx, datastoreName)
-	if err != nil {
-		return fmt.Errorf("datastore not found: %w", err)
+	if dsRef == nil {
+		return fmt.Errorf("could not determine datastore from VM's existing disks")
 	}
 
 	// Create new disk
@@ -1214,7 +1215,7 @@ func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int, datacen
 				DiskMode:        string(types.VirtualDiskModePersistent),
 				ThinProvisioned: types.NewBool(true),
 				VirtualDeviceFileBackingInfo: types.VirtualDeviceFileBackingInfo{
-					Datastore: types.NewReference(ds.Reference()),
+					Datastore: dsRef,
 				},
 			},
 		},
