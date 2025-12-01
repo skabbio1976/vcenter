@@ -17,6 +17,7 @@ import (
 	"github.com/vmware/govmomi/guest"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/vim25/methods"
+	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
@@ -126,13 +127,27 @@ func getStoragePlacementResult(
 		return nil, fmt.Errorf("storage placement task failed: %w", err)
 	}
 
-	// The result should be the cloned VM
-	vmRef, ok := info.Result.(types.ManagedObjectReference)
-	if !ok {
-		return nil, fmt.Errorf("unexpected result type from storage placement")
+	// The result is an ApplyStorageRecommendationResult containing VM reference
+	// Try direct ManagedObjectReference first
+	if vmRef, ok := info.Result.(types.ManagedObjectReference); ok {
+		return &vmRef, nil
 	}
 
-	return &vmRef, nil
+	// Try ApplyStorageRecommendationResult
+	if applyResult, ok := info.Result.(types.ApplyStorageRecommendationResult); ok {
+		if applyResult.Vm != nil {
+			return applyResult.Vm, nil
+		}
+	}
+
+	// Try as a pointer
+	if applyResult, ok := info.Result.(*types.ApplyStorageRecommendationResult); ok {
+		if applyResult != nil && applyResult.Vm != nil {
+			return applyResult.Vm, nil
+		}
+	}
+
+	return nil, fmt.Errorf("unexpected result type from storage placement: %T", info.Result)
 }
 
 // cloneVMInternal is the internal clone function that supports all options.
@@ -1092,7 +1107,7 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 		for i, diskSizeGB := range disks {
 			diskLetter := string(rune('D' + i)) // D, E, F, ...
 			log.Printf("    Adding %dGB disk (%s:)", diskSizeGB, diskLetter)
-			err = AddDisk(ctx, vm, diskSizeGB, datastore)
+			err = AddDisk(ctx, vm, diskSizeGB, datacenter, datastore)
 			if err != nil {
 				return vm, fmt.Errorf("VM created but failed to add disk %s: %w", diskLetter, err)
 			}
@@ -1155,28 +1170,22 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 //   - ctx: Context for timeout and cancellation
 //   - vm: VirtualMachine object to add disk to
 //   - sizeGB: Disk size in GB (e.g. 100 for 100GB)
+//   - datacenter: The name of the datacenter containing the datastore
 //   - datastoreName: The name of the datastore where the disk should be created
 //
 // Returns nil on success, otherwise an error.
 //
 // Example:
 //
-//	err := vcenter.AddDisk(ctx, vm, 100, "datastore1") // Add 100GB disk
-func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int, datastoreName string) error {
-	var vprops struct {
-		Config struct {
-			Hardware struct {
-				Device []types.BaseVirtualDevice
-			}
-		}
-	}
-
-	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vprops)
+//	err := vcenter.AddDisk(ctx, vm, 100, "DC1", "datastore1") // Add 100GB disk
+func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int, datacenter, datastoreName string) error {
+	var vmProps mo.VirtualMachine
+	err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &vmProps)
 	if err != nil {
 		return fmt.Errorf("failed to get VM properties: %w", err)
 	}
 
-	devices := object.VirtualDeviceList(vprops.Config.Hardware.Device)
+	devices := object.VirtualDeviceList(vmProps.Config.Hardware.Device)
 
 	// Find SCSI controller
 	controller, err := devices.FindSCSIController("")
@@ -1184,8 +1193,14 @@ func AddDisk(ctx context.Context, vm *object.VirtualMachine, sizeGB int, datasto
 		return fmt.Errorf("failed to find SCSI controller: %w", err)
 	}
 
-	// Find datastore
+	// Find datastore with datacenter context
 	finder := find.NewFinder(vm.Client(), true)
+	dc, err := finder.Datacenter(ctx, datacenter)
+	if err != nil {
+		return fmt.Errorf("datacenter not found: %w", err)
+	}
+	finder.SetDatacenter(dc)
+
 	ds, err := finder.Datastore(ctx, datastoreName)
 	if err != nil {
 		return fmt.Errorf("datastore not found: %w", err)

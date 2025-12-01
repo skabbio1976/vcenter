@@ -1,5 +1,8 @@
 # vcenter - PowerCLI-inspired Go API for VMware vCenter
 
+**dont clone this, its still buggy**  
+**I will relese as v1.0.3 when ready**  
+
 A user-friendly Go library for VMware vCenter, inspired by PowerCLI. This package wraps [govmomi](https://github.com/vmware/govmomi) and provides a simpler, more intuitive API for common vCenter operations.
 
 ## Features

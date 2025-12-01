@@ -286,7 +286,7 @@ func Test06_DiskOperations(t *testing.T) {
 
 	// Add disk
 	t.Log("Adding new disk (5 GB)...")
-	err = vcenter.AddDisk(ctx, vm, 5, config.TestResources.Datastore)
+	err = vcenter.AddDisk(ctx, vm, 5, "Datacenter01", config.TestResources.Datastore)
 	if err != nil {
 		testFailed = true
 		t.Fatalf("Failed to add disk: %v", err)

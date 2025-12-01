@@ -36,7 +36,7 @@ func main() {
 
 	// Add a 100GB disk
 	log.Println("\n1. Adding 100GB disk...")
-	err = vcenter.AddDisk(ctx, vm, 100, "datastore1")
+	err = vcenter.AddDisk(ctx, vm, 100, "Datacenter1", "datastore1")
 	if err != nil {
 		log.Printf("✗ Failed: %v", err)
 	} else {
@@ -45,7 +45,7 @@ func main() {
 
 	// Add a 50GB disk
 	log.Println("\n2. Adding 50GB disk...")
-	err = vcenter.AddDisk(ctx, vm, 50, "datastore1")
+	err = vcenter.AddDisk(ctx, vm, 50, "Datacenter1", "datastore1")
 	if err != nil {
 		log.Printf("✗ Failed: %v", err)
 	} else {
