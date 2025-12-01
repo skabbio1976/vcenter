@@ -821,35 +821,53 @@ func WaitForTools(ctx context.Context, vm *object.VirtualMachine) error {
 	}
 }
 
+// CustomizationExpected specifies what values to wait for during customization.
+type CustomizationExpected struct {
+	// Hostname is the expected hostname (without domain suffix).
+	// Required - customization waits until this matches.
+	Hostname string
+
+	// Domain is the expected domain suffix (e.g., "domain.local").
+	// If set, waits for hostname to be "Hostname.Domain".
+	// If empty, waits for hostname to match Hostname exactly.
+	Domain string
+
+	// IP is the expected IP address.
+	// If set, waits for this exact IP.
+	// If empty or "dhcp", accepts any valid (non-link-local) IP.
+	IP string
+}
+
 // WaitForCustomization waits for VM guest customization (Windows Sysprep) to complete.
 //
-// The function detects customization completion by checking three conditions:
-//  1. Hostname matches: The VM's hostname starts with the VM name
-//     (before sysprep: WIN-XXXXXXX, after: the name we configured)
-//  2. Valid IP address: Not a link-local address (169.254.x.x)
-//  3. VMware Tools running: Guest tools are operational
-//
-// This approach is more reliable than event-based monitoring because:
-//   - Events can be missed or delayed in vCenter
-//   - Hostname change is a deterministic marker that sysprep completed
-//   - Works for both domain-joined and standalone VMs
+// The function detects customization completion by checking:
+//  1. Hostname matches the expected value (with or without domain suffix)
+//  2. IP address matches (exact match for static, any valid IP for DHCP)
+//  3. VMware Tools is running
 //
 // Parameters:
 //   - ctx: Context for timeout and cancellation
 //   - vm: VirtualMachine object to monitor
 //   - timeout: Max time to wait (recommended: 10-15 minutes)
+//   - expected: Expected hostname, domain, and IP configuration
 //
 // Returns nil when customization completes, otherwise a timeout error.
 //
 // Example:
 //
-//	// After cloning with customization
-//	err := vcenter.WaitForCustomization(ctx, vm, 10*time.Minute)
-//	if err != nil {
-//	    log.Printf("Customization failed: %v", err)
-//	}
-//	fmt.Println("VM is ready - customization complete!")
-func WaitForCustomization(ctx context.Context, vm *object.VirtualMachine, timeout time.Duration) error {
+//	// Domain-joined VM with static IP
+//	err := vcenter.WaitForCustomization(ctx, vm, 10*time.Minute, vcenter.CustomizationExpected{
+//	    Hostname: "srv001",
+//	    Domain:   "domain.local",
+//	    IP:       "192.168.1.100",
+//	})
+//
+//	// Standalone VM with DHCP
+//	err := vcenter.WaitForCustomization(ctx, vm, 10*time.Minute, vcenter.CustomizationExpected{
+//	    Hostname: "srv002",
+//	    IP:       "dhcp",
+//	})
+func WaitForCustomization(ctx context.Context, vm *object.VirtualMachine, timeout time.Duration, expected CustomizationExpected) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -860,7 +878,23 @@ func WaitForCustomization(ctx context.Context, vm *object.VirtualMachine, timeou
 	var lastLogTime time.Time
 	vmName := vm.Name()
 
+	// Build expected hostname string
+	expectedHostname := strings.ToLower(expected.Hostname)
+	expectedFQDN := expectedHostname
+	if expected.Domain != "" {
+		expectedFQDN = expectedHostname + "." + strings.ToLower(expected.Domain)
+	}
+
+	// Determine if we need exact IP match
+	expectStaticIP := expected.IP != "" && strings.ToLower(expected.IP) != "dhcp"
+
 	log.Printf("Waiting for customization to complete on %s...", vmName)
+	log.Printf("  Expected: hostname=%s, ip=%s", expectedFQDN, func() string {
+		if expectStaticIP {
+			return expected.IP
+		}
+		return "(any valid)"
+	}())
 
 	for {
 		select {
@@ -873,30 +907,44 @@ func WaitForCustomization(ctx context.Context, vm *object.VirtualMachine, timeou
 				continue
 			}
 
-			hostname := vmProps.Guest.HostName
+			hostname := strings.ToLower(vmProps.Guest.HostName)
 			ip := vmProps.Guest.IpAddress
 			toolsStatus := vmProps.Guest.ToolsRunningStatus
 
-			// Check all three conditions:
-			// 1. Hostname matches VM name (handles both "srv001" and "srv001.domain.local")
-			hostnameMatches := hostname != "" &&
-				strings.HasPrefix(strings.ToLower(hostname), strings.ToLower(vmName))
+			// Check hostname match
+			// For domain-joined: expect "hostname.domain"
+			// For standalone: expect "hostname" exactly
+			var hostnameMatches bool
+			if expected.Domain != "" {
+				// Domain-joined: must match full FQDN
+				hostnameMatches = hostname == expectedFQDN
+			} else {
+				// Standalone: must match hostname exactly (no domain suffix)
+				hostnameMatches = hostname == expectedHostname
+			}
 
-			// 2. Valid IP (not link-local 169.254.x.x which indicates DHCP failure)
-			hasValidIP := ip != "" && !strings.HasPrefix(ip, "169.254.")
+			// Check IP match
+			var ipMatches bool
+			if expectStaticIP {
+				// Static IP: must match exactly
+				ipMatches = ip == expected.IP
+			} else {
+				// DHCP: any valid IP (not link-local)
+				ipMatches = ip != "" && !strings.HasPrefix(ip, "169.254.")
+			}
 
-			// 3. VMware Tools is running
+			// Check VMware Tools is running
 			toolsRunning := toolsStatus == string(types.VirtualMachineToolsRunningStatusGuestToolsRunning)
 
-			if hostnameMatches && hasValidIP && toolsRunning {
-				log.Printf("Customization complete on %s (hostname=%s, ip=%s)", vmName, hostname, ip)
+			if hostnameMatches && ipMatches && toolsRunning {
+				log.Printf("Customization complete on %s (hostname=%s, ip=%s)", vmName, vmProps.Guest.HostName, ip)
 				return nil
 			}
 
 			// Log status every 30 seconds
 			if time.Since(lastLogTime) >= 30*time.Second {
 				elapsed := int(time.Since(startTime).Seconds())
-				hostnameDisplay := hostname
+				hostnameDisplay := vmProps.Guest.HostName
 				if hostnameDisplay == "" {
 					hostnameDisplay = "(not set)"
 				}
@@ -904,8 +952,25 @@ func WaitForCustomization(ctx context.Context, vm *object.VirtualMachine, timeou
 				if ipDisplay == "" {
 					ipDisplay = "(no IP)"
 				}
-				log.Printf("  Waiting for %s (%ds): hostname=%s, ip=%s, tools=%s",
-					vmName, elapsed, hostnameDisplay, ipDisplay, toolsStatus)
+
+				// Show what's missing
+				var missing []string
+				if !hostnameMatches {
+					missing = append(missing, fmt.Sprintf("hostname want=%s", expectedFQDN))
+				}
+				if !ipMatches {
+					if expectStaticIP {
+						missing = append(missing, fmt.Sprintf("ip want=%s", expected.IP))
+					} else {
+						missing = append(missing, "ip want=(valid)")
+					}
+				}
+				if !toolsRunning {
+					missing = append(missing, "tools not running")
+				}
+
+				log.Printf("  Waiting for %s (%ds): hostname=%s, ip=%s [%s]",
+					vmName, elapsed, hostnameDisplay, ipDisplay, strings.Join(missing, ", "))
 				lastLogTime = time.Now()
 			}
 		}
@@ -1140,7 +1205,27 @@ func CloneFromRequest(ctx context.Context, client *govmomi.Client, req ServerReq
 	if customization != nil {
 		log.Printf("  Step 5: Waiting for customization to complete...")
 		customizationTimeout := 15 * time.Minute
-		err = WaitForCustomization(ctx, vm, customizationTimeout)
+
+		// Build expected values based on request
+		expected := CustomizationExpected{
+			Hostname: req.Name,
+			Domain:   req.Domain,
+		}
+
+		// Determine expected IP
+		if len(req.Adapters) > 0 {
+			// Multi-NIC: use first adapter's IP
+			expected.IP = req.Adapters[0].IPAddress
+		} else {
+			// Legacy single-NIC
+			expected.IP = req.IPAddress
+		}
+		// Empty IP or "dhcp" means accept any valid IP
+		if expected.IP == "" {
+			expected.IP = "dhcp"
+		}
+
+		err = WaitForCustomization(ctx, vm, customizationTimeout, expected)
 		if err != nil {
 			// Don't fail the whole operation - VM is created, customization might still work
 			log.Printf("  WARNING: Customization wait issue: %v", err)

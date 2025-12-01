@@ -145,7 +145,10 @@ func main() {
 
 	// 1. Wait for customization to complete first
 	log.Println("Waiting for customization...")
-	err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute)
+	err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute, vcenter.CustomizationExpected{
+		Hostname: "TestServer01",
+		IP:       "dhcp",
+	})
 	if err != nil {
 		log.Printf("Warning: %v", err)
 	}

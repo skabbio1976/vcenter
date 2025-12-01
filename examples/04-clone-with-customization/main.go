@@ -62,7 +62,11 @@ func main() {
 
 	// Wait for customization to complete (recommended approach)
 	log.Println("Waiting for customization to complete...")
-	err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute)
+	err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute, vcenter.CustomizationExpected{
+		Hostname: "WebServer01",
+		Domain:   "example.com",
+		IP:       "dhcp", // DHCP - accept any valid IP
+	})
 	if err != nil {
 		log.Printf("Warning: Customization timeout: %v", err)
 	} else {

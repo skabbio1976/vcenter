@@ -68,7 +68,11 @@ func main() {
 
 	// Wait for customization to complete
 	log.Println("Waiting for customization to complete...")
-	err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute)
+	err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute, vcenter.CustomizationExpected{
+		Hostname: "DBServer01",
+		Domain:   "example.com",
+		IP:       "192.168.1.100", // Static IP - wait for exact match
+	})
 	if err != nil {
 		log.Printf("Warning: %v", err)
 	} else {
