@@ -48,21 +48,13 @@ func DefaultVCenterConfig() VCenterConfig {
 }
 
 // Validate performs minimal sanity checks before persisting/using the configuration.
+// Username and password are optional here since they can be provided via credentials file or SSPI.
 func (cfg VCenterConfig) Validate() error {
 	if cfg.VCenter == "" {
 		return &ConfigurationError{Message: "vcenter is required"}
 	}
-	if cfg.Username == "" {
-		return &ConfigurationError{Message: "username is required"}
-	}
-	if cfg.Password == "" {
-		return &ConfigurationError{Message: "password is required"}
-	}
 	if cfg.Datacenter == "" {
 		return &ConfigurationError{Message: "datacenter is required"}
-	}
-	if cfg.ResourcePool == "" {
-		return &ConfigurationError{Message: "resource_pool is required"}
 	}
 	if cfg.Cluster == "" && cfg.StorageCluster == "" && cfg.Datastore == "" {
 		return &ConfigurationError{Message: "either cluster, storage_cluster or datastore must be specified"}
