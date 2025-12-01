@@ -1,8 +1,5 @@
 # vcenter - PowerCLI-inspired Go API for VMware vCenter
 
-**dont clone this, its still buggy**  
-**I will relese as v1.0.3 when ready**  
-
 A user-friendly Go library for VMware vCenter, inspired by PowerCLI. This package wraps [govmomi](https://github.com/vmware/govmomi) and provides a simpler, more intuitive API for common vCenter operations.
 
 ## Features
@@ -154,6 +151,7 @@ defer client.Logout(ctx)
 | `KeySource` | Key source for encryption (env, file, or direct) |
 | `VCenterInventory` | Scanned vCenter assets (templates, clusters, networks, etc.) |
 | `InventoryOptions` | Options for ScanVCenter (include/exclude sections) |
+| `CustomizationExpected` | Expected hostname/domain/IP for WaitForCustomization |
 
 ### Customization Functions
 
@@ -174,7 +172,7 @@ defer client.Logout(ctx)
 
 | Function | Description |
 |----------|-------------|
-| `WaitForCustomization()` | Wait for guest customization to complete (hostname-based detection) |
+| `WaitForCustomization()` | Wait for guest customization to complete (verifies hostname, domain, and IP) |
 | `WaitForTools()` | Wait for VMware Tools to be ready |
 | `WaitForIP()` | Wait for VM to get a routable IP address |
 
@@ -190,7 +188,7 @@ defer client.Logout(ctx)
 
 | Function | Description |
 |----------|-------------|
-| `AddDisk()` | Add a new disk to VM |
+| `AddDisk()` | Add a new disk to VM (auto-detects datastore from VM) |
 | `ExtendDisk()` | Extend existing disk |
 | `RemoveDisk()` | Remove disk from VM |
 
@@ -331,7 +329,11 @@ if err != nil {
 }
 
 // Wait for customization to complete (recommended!)
-err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute)
+err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute, vcenter.CustomizationExpected{
+    Hostname: "WebServer01",
+    Domain:   "example.com",
+    IP:       "dhcp", // or specific IP like "192.168.1.100"
+})
 if err != nil {
     log.Printf("Warning: Customization timeout: %v\n", err)
 }
@@ -562,7 +564,7 @@ err = vcenter.RestartVM(ctx, vm) // Graceful with Tools, otherwise hard reset
 > [Full example: examples/08-disk-operations/](examples/08-disk-operations/main.go)
 
 ```go
-err = vcenter.AddDisk(ctx, vm, 100, "datastore1")    // Add 100GB disk
+err = vcenter.AddDisk(ctx, vm, 100)                    // Add 100GB disk (uses VM's datastore)
 err = vcenter.ExtendDisk(ctx, vm, "Hard disk 2", 200) // Extend to 200GB
 err = vcenter.RemoveDisk(ctx, vm, "Hard disk 3")      // Remove disk
 ```
@@ -1092,21 +1094,54 @@ err = vcenter.DownloadFileFromVM(ctx, vm, "Administrator", adminPass,
 
 ## WaitForCustomization - The Important Function
 
-`WaitForCustomization` detects when Windows Sysprep or Linux customization is complete by checking:
+`WaitForCustomization` waits until the VM has the expected hostname, domain suffix, and IP address. This ensures the customization (Windows Sysprep or Linux cloud-init) has fully completed.
 
-1. **Hostname matches VM name** (before sysprep: `WIN-XXXXXXX`, after: configured name)
-2. **Valid IP address** (not link-local 169.254.x.x)
-3. **VMware Tools running**
+**Parameters:**
+- `vm` - The virtual machine to monitor
+- `timeout` - Maximum wait time (recommended: 10-15 minutes)
+- `expected` - What values to wait for:
+  - `Hostname` - Expected computer name (without domain)
+  - `Domain` - Expected domain suffix (empty for standalone/workgroup)
+  - `IP` - Expected IP address, or "dhcp" for any valid IP
 
-This is more reliable than event-based monitoring and works for both domain-joined and standalone VMs.
+**Behavior by scenario:**
+
+| Scenario | Expected Hostname | Expected IP |
+|----------|-------------------|-------------|
+| Domain-joined + static IP | `hostname.domain` | exact IP match |
+| Domain-joined + DHCP | `hostname.domain` | any valid IP |
+| Standalone + static IP | `hostname` (exact) | exact IP match |
+| Standalone + DHCP | `hostname` (exact) | any valid IP |
 
 ```go
-// Always use after CloneVMWithCustomization
-err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute)
-if err != nil {
-    log.Printf("Customization may still be running: %v", err)
-}
+// Domain-joined VM with static IP
+err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute, vcenter.CustomizationExpected{
+    Hostname: "srv001",
+    Domain:   "corp.example.com",
+    IP:       "192.168.1.100",
+})
+
+// Domain-joined VM with DHCP
+err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute, vcenter.CustomizationExpected{
+    Hostname: "srv002",
+    Domain:   "corp.example.com",
+    IP:       "dhcp",
+})
+
+// Standalone VM (workgroup) with static IP
+err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute, vcenter.CustomizationExpected{
+    Hostname: "testvm01",
+    IP:       "192.168.1.200",
+})
+
+// Standalone VM with DHCP
+err = vcenter.WaitForCustomization(ctx, vm, 15*time.Minute, vcenter.CustomizationExpected{
+    Hostname: "testvm02",
+    IP:       "dhcp",
+})
 ```
+
+**Note:** `CloneFromRequest` calls `WaitForCustomization` automatically with the correct expected values based on the `ServerRequest` configuration.
 
 ## Error Handling
 
