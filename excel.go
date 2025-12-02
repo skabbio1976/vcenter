@@ -32,6 +32,7 @@ type ExcelValidValues struct {
 	PortGroups       []string
 	SubnetMasks      []string
 	Domains          []string
+	OUPaths          []string
 	Timezones        []string
 	CPUOptions       []int
 	MemoryOptions    []int
@@ -51,6 +52,7 @@ func DefaultExcelValidValues() ExcelValidValues {
 		PortGroups:       []string{"VLAN-100-Prod", "VLAN-200-Dev", "VLAN-300-Test", "VLAN-400-Mgmt"},
 		SubnetMasks:      []string{"255.255.254.0", "255.255.255.0", "255.255.255.128", "255.255.255.192", "255.255.255.224", "255.255.255.240"},
 		Domains:          []string{"corp.example.com", "dev.example.com", "test.example.com"},
+		OUPaths:          []string{"OU=Servers,DC=corp,DC=example,DC=com", "OU=Windows,OU=Servers,DC=corp,DC=example,DC=com"},
 		Timezones:        []string{"W. Europe Standard Time", "Central European Standard Time", "UTC", "GMT Standard Time"},
 		CPUOptions:       []int{2, 4, 8, 16},
 		MemoryOptions:    []int{4096, 8192, 16384, 32768, 65536},
@@ -80,7 +82,7 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 		"port_group_2", "ip_2", "subnet_mask_2", "gateway_2", "dns_servers_2",
 		"port_group_3", "ip_3", "subnet_mask_3", "gateway_3", "dns_servers_3",
 		"num_cpus", "memory_mb", "disk_gb", "disk_provisioning", "server_role",
-		"hostname", "domain", "domain_join_user", "ou_path",
+		"domain", "domain_join_user", "ou_path",
 		"autologon_count", "timezone", "run_once_commands",
 	}
 
@@ -101,8 +103,8 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 		"M": 18, "N": 15, "O": 15, "P": 15, "Q": 25,
 		"R": 18, "S": 15, "T": 15, "U": 15, "V": 25,
 		"W": 10, "X": 12, "Y": 15, "Z": 15, "AA": 12,
-		"AB": 18, "AC": 20, "AD": 18, "AE": 50,
-		"AF": 15, "AG": 25, "AH": 50,
+		"AB": 20, "AC": 18, "AD": 50,
+		"AE": 15, "AF": 25, "AG": 50,
 	}
 	for col, width := range columnWidths {
 		f.SetColWidth(vmRequestSheet, col, col, width)
@@ -154,6 +156,7 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 	writeColumn("L", "Server Roles", values.ServerRoles)
 	writeColumn("M", "Disk Provisioning", values.DiskProvisioning)
 	writeColumn("N", "Subnet Masks", values.SubnetMasks)
+	writeColumn("O", "OU Paths", values.OUPaths)
 
 	// addValidationRef creates a dropdown that references the Valid Values sheet
 	// Users can edit the Valid Values sheet to add more options
@@ -184,8 +187,9 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 	addValidationRef("X", "J", 100)  // memory_mb -> Memory Options
 	addValidationRef("Z", "M", 100)  // disk_provisioning -> Disk Provisioning
 	addValidationRef("AA", "L", 100) // server_role -> Server Roles
-	addValidationRef("AC", "G", 100) // domain -> Domains
-	addValidationRef("AG", "H", 100) // timezone -> Timezones
+	addValidationRef("AB", "G", 100) // domain -> Domains
+	addValidationRef("AD", "O", 100) // ou_path -> OU Paths
+	addValidationRef("AF", "H", 100) // timezone -> Timezones
 
 	instructionWidths := map[string]float64{
 		"A": 32,
@@ -313,7 +317,6 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 		{"disk_gb", "Semikolonseparerad lista över extra diskar i GB, t.ex. '50;100'. Lämna tomt för inga extra diskar."},
 		{"disk_provisioning", "Välj 'thin' eller 'thick'."},
 		{"server_role", "Serverroll från listan 'Server Roles'."},
-		{"hostname", "Hostname som sätts i gäst-OS."},
 		{"domain", "AD-domän som VM:n ska gå med i. Krävs om domänjoin används."},
 		{"domain_join_user", "Konto med rättigheter att gå med i domänen (valfritt vid manuell join)."},
 		{"ou_path", "LDAP-sökväg, t.ex. 'OU=Servers,DC=corp,DC=example,DC=com'."},
@@ -371,7 +374,6 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 		{"disk_gb", "Semicolon-separated list of additional disks in GB, e.g. '50;100'. Leave blank for none."},
 		{"disk_provisioning", "Choose 'thin' or 'thick'."},
 		{"server_role", "Server role from the 'Server Roles' list."},
-		{"hostname", "Hostname assigned inside the guest OS."},
 		{"domain", "Active Directory domain to join. Required when performing a domain join."},
 		{"domain_join_user", "Account with permissions to join the domain (optional for manual join)."},
 		{"ou_path", "LDAP path, e.g. 'OU=Servers,DC=corp,DC=example,DC=com'."},
@@ -488,21 +490,21 @@ func exampleRows() [][]any {
 			"", "", "", "", "",
 			"", "", "", "", "",
 			4, 8192, "20", "thick", "DC",
-			"DC-PROD-01", "corp.example.com", "svc_domainjoin", "OU=Domain Controllers,DC=corp,DC=example,DC=com",
+			"corp.example.com", "svc_domainjoin", "OU=Domain Controllers,DC=corp,DC=example,DC=com",
 			3, "W. Europe Standard Time", ""},
 		{"SQL-PROD-01", "Windows2022-Template", "DC-Stockholm", "Prod-Cluster", "VSAN-Cluster-01", "", "Production/Database",
 			"VLAN-100-Prod", "10.20.30.20", "255.255.255.0", "10.20.30.1", "10.20.1.10;10.20.1.11",
 			"VLAN-400-Mgmt", "10.20.40.20", "255.255.255.0", "10.20.40.1", "",
 			"", "", "", "", "",
 			8, 32768, "50;100;200", "thin", "SQL",
-			"SQL-PROD-01", "corp.example.com", "svc_domainjoin", "OU=SQL,OU=Servers,DC=corp,DC=example,DC=com",
+			"corp.example.com", "svc_domainjoin", "OU=SQL,OU=Servers,DC=corp,DC=example,DC=com",
 			3, "W. Europe Standard Time", "powershell.exe -File C:\\Scripts\\sql-setup.ps1"},
 		{"APP-PROD-01", "Windows2022-Template", "DC-Stockholm", "Prod-Cluster", "VSAN-Cluster-01", "", "Production/Applications",
 			"VLAN-100-Prod", "DHCP", "", "", "10.20.1.10;10.20.1.11",
 			"", "", "", "", "",
 			"", "", "", "", "",
 			2, 4096, "", "thin", "Member",
-			"APP-PROD-01", "corp.example.com", "svc_domainjoin", "OU=Servers,OU=Production,DC=corp,DC=example,DC=com",
+			"corp.example.com", "svc_domainjoin", "OU=Servers,OU=Production,DC=corp,DC=example,DC=com",
 			3, "W. Europe Standard Time", ""},
 	}
 }
@@ -749,7 +751,7 @@ func rowToConfig(row []string, header map[string]int) (ExcelVMConfig, error) {
 
 	adapters := parseAdapters(row, header)
 	customization := ExcelCustomization{
-		Hostname: getCell(row, header, "hostname"),
+		Hostname: vmName, // hostname defaults to vm_name
 		Domain:   getCell(row, header, "domain"),
 		DomainJoin: ExcelDomainJoin{
 			Username:       getCell(row, header, "domain_join_user"),

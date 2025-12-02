@@ -2,6 +2,7 @@ package vcenter
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -2595,6 +2596,78 @@ func UploadFileToVM(ctx context.Context, vm *object.VirtualMachine, guestUsernam
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, turl.String(), file)
+	if err != nil {
+		return fmt.Errorf("failed to create upload request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := vm.Client().Client.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to upload file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	return fmt.Errorf("file upload failed (status %d): %s", resp.StatusCode, string(body))
+}
+
+// UploadBytesToVM uploads bytes directly to a virtual machine via VMware Tools.
+//
+// This is useful for uploading embedded files or dynamically generated content
+// without writing to a local file first.
+//
+// The VM must be powered on and have VMware Tools running.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: VirtualMachine object
+//   - guestUsername: Username for guest OS (e.g., "Administrator")
+//   - guestPassword: Password for guest OS user
+//   - content: Bytes to upload
+//   - remoteFilePath: Destination path on guest OS (e.g., "C:\\temp\\script.ps1")
+//   - overwrite: If true, overwrites existing file
+//
+// Returns nil on success, otherwise an error.
+//
+// Example:
+//
+//	content := []byte("Write-Host 'Hello World'")
+//	err := vcenter.UploadBytesToVM(ctx, vm, "Administrator", "password",
+//	    content, "C:\\temp\\script.ps1", true)
+func UploadBytesToVM(ctx context.Context, vm *object.VirtualMachine, guestUsername string, guestPassword string, content []byte, remoteFilePath string, overwrite bool) error {
+	ops := guest.NewOperationsManager(vm.Client(), vm.Reference())
+	fileManager, err := ops.FileManager(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create guest file manager: %w", err)
+	}
+
+	auth := &types.NamePasswordAuthentication{
+		Username: guestUsername,
+		Password: guestPassword,
+	}
+
+	transferURL, err := fileManager.InitiateFileTransferToGuest(
+		ctx,
+		auth,
+		remoteFilePath,
+		&types.GuestFileAttributes{},
+		int64(len(content)),
+		overwrite,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to initiate file transfer: %w", err)
+	}
+
+	turl, err := fileManager.TransferURL(ctx, transferURL)
+	if err != nil {
+		return fmt.Errorf("failed to prepare transfer URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, turl.String(), bytes.NewReader(content))
 	if err != nil {
 		return fmt.Errorf("failed to create upload request: %w", err)
 	}
