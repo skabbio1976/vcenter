@@ -84,6 +84,7 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 		"num_cpus", "memory_mb", "disk_gb", "disk_provisioning", "server_role",
 		"domain", "domain_join_user", "ou_path",
 		"autologon_count", "timezone", "run_once_commands",
+		"owner", "notes",
 	}
 
 	for colIdx, header := range headers {
@@ -105,6 +106,7 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 		"W": 10, "X": 12, "Y": 15, "Z": 15, "AA": 12,
 		"AB": 20, "AC": 18, "AD": 50,
 		"AE": 15, "AF": 25, "AG": 50,
+		"AH": 18, "AI": 50,
 	}
 	for col, width := range columnWidths {
 		f.SetColWidth(vmRequestSheet, col, col, width)
@@ -323,6 +325,8 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 		{"autologon_count", "Antal gånger administratörskontot ska logga in automatiskt."},
 		{"timezone", "Tidszon enligt listan 'Timezones'."},
 		{"run_once_commands", "Semikolonseparerade kommandon som körs efter första inloggningen."},
+		{"owner", "Ägare av VM:n. Lämna tomt för att använda inloggad användare."},
+		{"notes", "Anteckningar som sparas på VM:n i vCenter. Standard: 'Deployed: datum By vforge Owner: ägare'."},
 		{""},
 		{"CIDR-tabell för subnet_mask-fälten:"},
 		{"CIDR", "Nätmask", "Totalt antal IP-adresser", "Max värdar"},
@@ -380,6 +384,8 @@ func CreateExcelTemplate(path string, values *ExcelValidValues) error {
 		{"autologon_count", "Number of times the Administrator account should log on automatically."},
 		{"timezone", "Time zone value from the 'Timezones' list."},
 		{"run_once_commands", "Semicolon-separated commands that run after the first logon."},
+		{"owner", "Owner of the VM. Leave blank to use the logged-in username."},
+		{"notes", "Notes saved on the VM in vCenter. Default: 'Deployed: date By vforge Owner: owner'."},
 		{""},
 		{"CIDR reference for subnet_mask columns:"},
 		{"CIDR", "Netmask", "Total IP addresses", "Max hosts"},
@@ -491,21 +497,24 @@ func exampleRows() [][]any {
 			"", "", "", "", "",
 			4, 8192, "20", "thick", "DC",
 			"corp.example.com", "svc_domainjoin", "OU=Domain Controllers,DC=corp,DC=example,DC=com",
-			3, "W. Europe Standard Time", ""},
+			3, "W. Europe Standard Time", "",
+			"", ""},
 		{"SQL-PROD-01", "Windows2022-Template", "DC-Stockholm", "Prod-Cluster", "VSAN-Cluster-01", "", "Production/Database",
 			"VLAN-100-Prod", "10.20.30.20", "255.255.255.0", "10.20.30.1", "10.20.1.10;10.20.1.11",
 			"VLAN-400-Mgmt", "10.20.40.20", "255.255.255.0", "10.20.40.1", "",
 			"", "", "", "", "",
 			8, 32768, "50;100;200", "thin", "SQL",
 			"corp.example.com", "svc_domainjoin", "OU=SQL,OU=Servers,DC=corp,DC=example,DC=com",
-			3, "W. Europe Standard Time", "powershell.exe -File C:\\Scripts\\sql-setup.ps1"},
+			3, "W. Europe Standard Time", "powershell.exe -File C:\\Scripts\\sql-setup.ps1",
+			"DBA-Team", ""},
 		{"APP-PROD-01", "Windows2022-Template", "DC-Stockholm", "Prod-Cluster", "VSAN-Cluster-01", "", "Production/Applications",
 			"VLAN-100-Prod", "DHCP", "", "", "10.20.1.10;10.20.1.11",
 			"", "", "", "", "",
 			"", "", "", "", "",
 			2, 4096, "", "thin", "Member",
 			"corp.example.com", "svc_domainjoin", "OU=Servers,OU=Production,DC=corp,DC=example,DC=com",
-			3, "W. Europe Standard Time", ""},
+			3, "W. Europe Standard Time", "",
+			"", "Custom note for this VM"},
 	}
 }
 
@@ -562,6 +571,8 @@ type ExcelVMConfig struct {
 	NetworkAdapters []ExcelNetworkAdapter `json:"network_adapters"`
 	Hardware        ExcelHardware         `json:"hardware"`
 	Customization   ExcelCustomization    `json:"customization"`
+	Owner           string                `json:"owner,omitempty"`
+	Notes           string                `json:"notes,omitempty"`
 }
 
 // ExcelToJSON converts Excel rows into ExcelVMConfig list and optionally writes JSON files.
@@ -785,6 +796,8 @@ func rowToConfig(row []string, header map[string]int) (ExcelVMConfig, error) {
 			ServerRole:       getCell(row, header, "server_role"),
 		},
 		Customization: customization,
+		Owner:         getCell(row, header, "owner"),
+		Notes:         getCell(row, header, "notes"),
 	}
 
 	return config, nil

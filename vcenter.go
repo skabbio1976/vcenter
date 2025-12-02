@@ -649,6 +649,29 @@ func SetVMResources(ctx context.Context, vm *object.VirtualMachine, numCPUs int3
 	return task.Wait(ctx)
 }
 
+// SetVMAnnotation sets the annotation (notes) field on a VM in vCenter.
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - vm: The target VM
+//   - annotation: The text to set as the VM's annotation
+//
+// Example:
+//
+//	err := vcenter.SetVMAnnotation(ctx, vm, "Deployed: 2025-12-02\nOwner: admin")
+func SetVMAnnotation(ctx context.Context, vm *object.VirtualMachine, annotation string) error {
+	spec := types.VirtualMachineConfigSpec{
+		Annotation: annotation,
+	}
+
+	task, err := vm.Reconfigure(ctx, spec)
+	if err != nil {
+		return fmt.Errorf("failed to set annotation: %w", err)
+	}
+
+	return task.Wait(ctx)
+}
+
 // ============================================================================
 // VM Helpers
 // ============================================================================

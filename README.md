@@ -255,6 +255,7 @@ defer client.Logout(ctx)
 | `GetVM()` | Find VM by name |
 | `GetVMInfo()` | Get detailed VM info |
 | `SetVMResources()` | Change CPU/memory |
+| `SetVMAnnotation()` | Set VM notes/annotation |
 | `DeleteVM()` | Delete VM |
 | `UnregisterVM()` | Unregister VM |
 | `MountISO()` / `UnmountISO()` | ISO operations |
@@ -727,13 +728,16 @@ for _, cfg := range configs {
 | `disk_gb` | Extra disks (semicolon-separated) | `50;100;200` |
 | `disk_provisioning` | thin or thick | `thin` |
 | `server_role` | Server role | `DC`, `SQL`, `Web` |
-| `hostname` | Computer name | `DC-PROD-01` |
 | `domain` | Domain to join | `corp.example.com` |
 | `domain_join_user` | Domain join account | `svc_domainjoin` |
 | `ou_path` | AD OU path | `OU=Servers,DC=corp,DC=com` |
 | `autologon_count` | Auto-login count | `3` |
 | `timezone` | Windows timezone | `W. Europe Standard Time` |
 | `run_once_commands` | Post-install commands | `powershell.exe -File setup.ps1` |
+| `owner` | VM owner | `DBA-Team` |
+| `notes` | VM annotation in vCenter | (auto-generated if empty) |
+
+**Note:** `vm_name` is also used as the hostname in the guest OS. The `owner` and `notes` fields are stored as VM annotations in vCenter.
 
 ## Configuration Management
 
